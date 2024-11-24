@@ -7,3 +7,25 @@
 ```bash
 pip install qka
 ```
+
+```python
+datas = qka.data(
+  stock_list=[], 
+  period='tick', 
+  indicators=[
+    'MA',
+    'BOLL'
+  ]
+)
+
+
+def strategy(bar, bars, borker):
+  pass
+
+res = qka.backtest(datas, start_time='', end_time='', strategy=strategy)
+
+borker = qka.broker(type='qmt', config={})
+
+qka.trade(datas, start_time='', strategy=strategy, borker=borker)
+
+```
