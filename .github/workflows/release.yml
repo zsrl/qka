@@ -1,0 +1,70 @@
+name: Python package
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  Test:
+    runs-on: windows-latest
+    permissions: write-all
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Ensure full history for semantic-release
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'  # You can specify your required Python version here
+
+      - name: Install Flit
+        run: |
+          pip install flit
+        shell: bash
+
+      - name: Check release status
+        id: release-status
+        run: |
+          pip install python-semantic-release
+          if semantic-release --noop --strict version; then
+            echo "::set-output name=released::true"
+          else
+            echo "::set-output name=released::false"
+          fi
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Semantic Release Version
+        if: steps.release-status.outputs.released == 'true'
+        run: |
+          semantic-release version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+
+      - name: Release to PyPI
+        if: steps.release-status.outputs.released == 'true'
+        run: |
+          flit build
+          flit publish --repository pypi
+        shell: bash
+        env:
+          FLIT_USERNAME: __token__
+          FLIT_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+
+      - name: Release to GitHub
+        if: steps.release-status.outputs.released == 'true'
+        run: |
+          git fetch --tags
+          for file in ./dist/*; do
+            gh release upload "${{ steps.release-status.outputs.tag }}" $file
+          done
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
