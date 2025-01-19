@@ -4,16 +4,18 @@ import inspect
 from typing import Any, Dict
 from qka.trade import create_trader
 import uvicorn
-import secrets
+import uuid
+import hashlib
 
 class QMTServer:
-    def __init__(self, account_id: str, mini_qmt_path: str, host: str = "0.0.0.0", port: int = 8000):
+    def __init__(self, account_id: str, mini_qmt_path: str, host: str = "0.0.0.0", port: int = 8000, token: str = None):
         """初始化交易服务器
         Args:
             account_id: 账户ID
             mini_qmt_path: miniQMT路径
             host: 服务器地址，默认0.0.0.0
             port: 服务器端口，默认8000
+            token: 可选的自定义token
         """
         self.account_id = account_id
         self.mini_qmt_path = mini_qmt_path
@@ -22,8 +24,18 @@ class QMTServer:
         self.app = FastAPI()
         self.trader = None
         self.account = None
-        self.token = secrets.token_urlsafe(32)  # 生成随机token
+        self.token = token if token else self.generate_token()  # 使用自定义token或生成固定token
         print(f"\n授权Token: {self.token}\n")  # 打印token供客户端使用
+
+    def generate_token(self) -> str:
+        """生成基于机器码的固定token"""
+        # 获取机器码（例如MAC地址）
+        mac = uuid.getnode()
+        # 将机器码转换为字符串
+        mac_str = str(mac)
+        # 使用SHA256哈希生成固定长度的token
+        token = hashlib.sha256(mac_str.encode()).hexdigest()
+        return token
 
     async def verify_token(self, x_token: str = Header(...)):
         """验证token的依赖函数"""
@@ -37,8 +49,11 @@ class QMTServer:
 
     def convert_to_dict(self, obj):
         """将结果转换为可序列化的字典"""
+        # 如果是基本类型，直接返回
+        if isinstance(obj, (int, float, str, bool)):
+            return obj
         # 如果已经是字典类型，直接返回
-        if isinstance(obj, dict):
+        elif isinstance(obj, dict):
             return obj
         # 如果是列表或元组，递归转换每个元素
         elif isinstance(obj, (list, tuple)):
@@ -52,7 +67,7 @@ class QMTServer:
                            if not attr.startswith('_') and not callable(getattr(obj, attr))}
             return public_attrs
         # 其他类型直接返回
-        return obj
+        return str(obj)  # 将无法处理的类型转换为字符串
 
     def convert_method_to_endpoint(self, method_name: str, method):
         """将 XtQuantTrader 方法转换为 FastAPI 端点"""
@@ -105,7 +120,7 @@ class QMTServer:
         self.setup_routes()
         uvicorn.run(self.app, host=self.host, port=self.port)
 
-def qmt_server(account_id: str, mini_qmt_path: str, host: str = "0.0.0.0", port: int = 8000):
+def qmt_server(account_id: str, mini_qmt_path: str, host: str = "0.0.0.0", port: int = 8000, token: str = None):
     """快速创建并启动服务器的便捷函数"""
-    server = QMTServer(account_id, mini_qmt_path, host, port)
+    server = QMTServer(account_id, mini_qmt_path, host, port, token)
     server.start()
