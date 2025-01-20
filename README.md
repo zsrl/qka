@@ -38,7 +38,7 @@ result = client.api("query_stock_asset")
 from qka.client import QMTClient
 from xtquant import xtconstant
 
-client = QMTClient(token="服务器打印的token")
+client = QMTClient(token="服务器打印的token", url="服务端地址")
 # 调用接口
 result = client.api("order_stock", stock_code='600000.SH', order_type=xtconstant.STOCK_BUY, order_volume =1000, price_type=xtconstant.FIX_PRICE, price=10.5)
 ```
