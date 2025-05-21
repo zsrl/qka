@@ -1,6 +1,6 @@
 [build-system]
-requires = ["flit_core >=3.2,<4"]
-build-backend = "flit_core.buildapi"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "qka"
@@ -11,10 +11,10 @@ readme = "README.md"
 license = {file = "LICENSE"}
 classifiers = ["License :: OSI Approved :: MIT License"]
 dependencies = [
-    "xtquant",
-    "fastapi",
-    "uvicorn"
+    "mcp[cli]>=1.9.0",
+    "xtquant>=241014.1.2",
 ]
+# 依赖移到requirements.txt，便于uv管理
 
 [project.urls]
 Home = "https://github.com/zsrl/qka"

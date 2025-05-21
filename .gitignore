@@ -99,6 +99,12 @@ ipython_config.py
 #   This is especially recommended for binary packages to ensure reproducibility, and is more
 #   commonly ignored for libraries.
 #   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
+
+# uv
+.venv/
+.uv/
+__pypackages__/
+.uvrc.local
 #poetry.lock
 
 # pdm
@@ -162,3 +168,4 @@ cython_debug/
 #.idea/
 
 *.ipynb
+uv.lock
