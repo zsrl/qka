@@ -1,0 +1,30 @@
+{
+  "name": "SimpleQuantServer",
+  "version": "0.1",
+  "protocol": "mcp-0.8",
+  "tools": {
+    "dummy_backtest": {
+      "description": "量化回测演示工具",
+      "parameters": {
+        "symbol": {
+          "type": "string",
+          "description": "股票/加密货币代码"
+        },
+        "start_date": {
+          "type": "date",
+          "format": "YYYY-MM-DD"
+        },
+        "end_date": {
+          "type": "date",
+          "format": "YYYY-MM-DD",
+          "constraints": {
+            "after_field": "start_date"
+          }
+        }
+      },
+      "returns": {
+        "content_types": ["text/html"]
+      }
+    }
+  }
+}
