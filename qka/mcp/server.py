@@ -1,43 +1,71 @@
 from mcp.server import FastMCP
+import pandas as pd
+import os
 from datetime import datetime
 
-mcp = FastMCP("SimpleQuantServer")
+app = FastMCP('qka')
 
-@mcp.tool()
-def dummy_backtest(
-    symbol: str,
-    start_date: str,
-    end_date: str
+@app.tool()
+def query_akshare_data(
+        code: str = ''
 ) -> dict:
     """
-    伪量化回测工具（仅格式化显示输入参数）
-    参数示例:
-      symbol: "AAPL"
-      start_date: "2023-01-01" 
-      end_date: "2024-01-01"
+    查询akshare数据源数据
+    :param code: 查询代码，要求使用akshare库, 要求生成的函数名叫query,返回数据格式为pandas.DataFrame
+    :return: 查询结果
     """
-    # 生成简易HTML报告
-    html = f"""
-    <html>
-      <head><title>策略参数预览</title></head>
-      <body style="font-family: Arial; margin: 20px;">
-        <h2>📊 回测参数确认</h2>
-        <table border="1" cellpadding="5">
-          <tr><th>参数</th><th>值</th></tr>
-          <tr><td>股票代码</td><td>{symbol}</td></tr>
-          <tr><td>开始日期</td><td>{start_date}</td></tr>
-          <tr><td>结束日期</td><td>{end_date}</td></tr>
-        </table>
-        <p style="color: grey; margin-top: 20px;">
-          * 此为演示版本，实际回测功能待实现
-        </p>
-      </body>
-    </html>
-    """
-    return {
-        "要求": "请直接用代码生成并渲染下面data中的html",
-        "data": html
-    }
+    # 创建本地命名空间，预先导入akshare
+    local_namespace = {}
+    global_namespace = globals().copy()
+    
+    try:
+        # 尝试导入akshare到全局命名空间
+        import akshare as ak
+        global_namespace['akshare'] = ak
+        global_namespace['ak'] = ak
+    except ImportError:
+        return {"error": "无法导入akshare模块，请确认已正确安装"}
+    
+    # 执行传入的代码
+    try:
+        exec(code, global_namespace, local_namespace)
+        
+        # 检查是否定义了query函数
+        if 'query' not in local_namespace or not callable(local_namespace['query']):
+            return {"error": "代码中未定义query函数"}
+        
+        # 执行query函数（不传入参数）
+        result = local_namespace['query']()
+        
+        # 检查返回结果是否为DataFrame
+        if not isinstance(result, pd.DataFrame):
+            return {"error": "query函数返回的结果不是DataFrame类型"}
+        
+        # 创建保存目录
+        save_dir = r"e:\Code\qka\output"
+        os.makedirs(save_dir, exist_ok=True)
+        
+        # 生成文件名
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"data_{timestamp}.csv"
+        file_path = os.path.join(save_dir, filename)
+        
+        # 保存为CSV文件
+        result.to_csv(file_path, index=False, encoding='utf-8-sig')
+        
+        # 将DataFrame转换为字典返回，并包含条数信息和文件路径
+        data_dict = result.to_dict(orient="records")
+        
+        return {
+            "message": "数据已成功保存为CSV文件",
+            "file_path": file_path,
+            "record_count": len(data_dict),
+            "data": data_dict[:10] if len(data_dict) > 10 else data_dict  # 只返回前10条预览
+        }
+    
+    except Exception as e:
+        return {"error": f"报错后不需要重试，执行代码时发生错误: {str(e)}"}
 
-if __name__ == "__main__":
-    mcp.run(transport="stdio")  # 启动服务
+
+if __name__ == '__main__':
+    app.run(transport='stdio')
