@@ -1,11 +1,11 @@
 site_name: QKA - 快量化文档
 site_description: 快捷量化助手（Quick Quantitative Assistant）- 简洁易用的A股量化交易框架
 site_author: QKA Team
-site_url: https://your-username.github.io/qka
+site_url: https://zsrl.github.io/qka
 
 # Repository
-repo_name: qka
-repo_url: https://github.com/your-username/qka
+repo_name: zsrl/qka
+repo_url: https://github.com/zsrl/qka
 edit_uri: edit/main/docs/
 
 # Copyright
@@ -86,10 +86,10 @@ markdown_extensions:
       line_spans: __span
       pygments_lang_class: true
   - pymdownx.inlinehilite
-  - pymdownx.keys
+  - pymdownx.keys  
   - pymdownx.magiclink:
       repo_url_shorthand: true
-      user: your-username
+      user: zsrl
       repo: qka
   - pymdownx.mark
   - pymdownx.smartsymbols
@@ -108,7 +108,7 @@ markdown_extensions:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/your-username/qka
+      link: https://github.com/zsrl/qka
     - icon: fontawesome/brands/python
       link: https://pypi.org/project/qka
   

@@ -23,6 +23,7 @@ dependencies = [
     "plotly>=6.1.1",
     "uvicorn>=0.34.3",
     "xtquant>=241014.1.2",
+    "ipykernel>=6.29.5",
 ]
 # 依赖移到requirements.txt，便于uv管理
 

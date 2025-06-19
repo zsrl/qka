@@ -6,12 +6,10 @@ QKA Brokers 模块
 
 from .client import QMTClient
 from .trade import Trade, Order, Position
-from .server import BrokerServer
 
 __all__ = [
     'QMTClient',
     'Trade',
     'Order', 
-    'Position',
-    'BrokerServer'
+    'Position'
 ]

@@ -1,10 +1,8 @@
 # QKA - 快量化
 
-<div align="center">
+<div align="center" markdown="1">
 
-![QKA Logo](https://via.placeholder.com/200x120/2196F3/FFFFFF?text=QKA)
-
-**快捷量化助手（Quick Quantitative Assistant）**
+**Quick Quantitative Assistant**
 
 一个简洁易用、可实操A股的量化交易框架
 
@@ -13,7 +11,7 @@
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 [快速开始](getting-started/installation.md){ .md-button .md-button--primary }
-[GitHub](https://github.com/your-username/qka){ .md-button }
+[GitHub](https://github.com/zsrl/qka){ .md-button }
 
 </div>
 
@@ -177,7 +175,7 @@ graph TB
 
 ---
 
-<div align="center">
+<div align="center" markdown="1">
 
 **开始您的量化之旅** 🚀
 
