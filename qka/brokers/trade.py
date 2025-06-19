@@ -1,3 +1,6 @@
+from typing import Dict, Any, Optional
+from datetime import datetime
+from enum import Enum
 from xtquant.xttrader import XtQuantTrader, XtQuantTraderCallback
 from xtquant.xttype import StockAccount
 import random
@@ -6,6 +9,108 @@ from qka.utils.anis import RED, GREEN, YELLOW, BLUE, RESET
 from qka.utils.logger import logger
 
 error_orders = []
+
+class OrderSide(Enum):
+    """订单方向"""
+    BUY = "buy"
+    SELL = "sell"
+
+class OrderType(Enum):
+    """订单类型"""
+    MARKET = "market"
+    LIMIT = "limit"
+    STOP = "stop"
+    STOP_LIMIT = "stop_limit"
+
+class OrderStatus(Enum):
+    """订单状态"""
+    PENDING = "pending"
+    FILLED = "filled"
+    CANCELLED = "cancelled"
+    REJECTED = "rejected"
+
+class Order:
+    """订单对象"""
+    
+    def __init__(self, symbol: str, side: str, quantity: int, 
+                 order_type: str = "market", price: Optional[float] = None,
+                 order_id: Optional[str] = None):
+        """
+        初始化订单
+        
+        Args:
+            symbol: 股票代码
+            side: 买卖方向 ("buy" 或 "sell")
+            quantity: 数量
+            order_type: 订单类型
+            price: 价格（限价单需要）
+            order_id: 订单ID
+        """
+        self.symbol = symbol
+        self.side = side
+        self.quantity = quantity
+        self.order_type = order_type
+        self.price = price
+        self.order_id = order_id or self._generate_order_id()
+        self.status = OrderStatus.PENDING.value
+        self.created_time = datetime.now()
+        self.filled_quantity = 0
+        self.remaining_quantity = quantity
+    
+    def _generate_order_id(self) -> str:
+        """生成订单ID"""
+        import uuid
+        return str(uuid.uuid4())[:8]
+
+class Trade:
+    """交易记录"""
+    
+    def __init__(self, order_id: str, symbol: str, side: str, 
+                 quantity: int, price: float, commission: float = 0.0):
+        """
+        初始化交易记录
+        
+        Args:
+            order_id: 订单ID
+            symbol: 股票代码
+            side: 买卖方向
+            quantity: 成交数量
+            price: 成交价格
+            commission: 手续费
+        """
+        self.order_id = order_id
+        self.symbol = symbol
+        self.side = side
+        self.quantity = quantity
+        self.price = price
+        self.commission = commission
+        self.trade_time = datetime.now()
+        self.trade_value = quantity * price
+
+class Position:
+    """持仓信息"""
+    
+    def __init__(self, symbol: str, quantity: int = 0, avg_price: float = 0.0):
+        """
+        初始化持仓
+        
+        Args:
+            symbol: 股票代码
+            quantity: 持仓数量
+            avg_price: 平均持仓价格
+        """
+        self.symbol = symbol
+        self.quantity = quantity
+        self.avg_price = avg_price
+        self.market_value = 0.0
+        self.unrealized_pnl = 0.0
+        self.realized_pnl = 0.0
+    
+    def update_market_price(self, current_price: float):
+        """更新市场价格和盈亏"""
+        self.market_value = self.quantity * current_price
+        if self.quantity > 0:
+            self.unrealized_pnl = (current_price - self.avg_price) * self.quantity
 
 class MyXtQuantTraderCallback(XtQuantTraderCallback):
     def on_disconnected(self):

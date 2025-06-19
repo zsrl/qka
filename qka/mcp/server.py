@@ -1,7 +1,61 @@
+from typing import Dict, Any, Optional, Callable
+import asyncio
 from mcp.server import FastMCP
 import pandas as pd
 import os
 from datetime import datetime
+
+class ModelServer:
+    """模型服务器"""
+    
+    def __init__(self, port: int = 8080):
+        """
+        初始化模型服务器
+        
+        Args:
+            port: 服务器端口
+        """
+        self.port = port
+        self.models = {}
+        self.running = False
+    
+    def register_model(self, name: str, model_func: Callable):
+        """
+        注册模型
+        
+        Args:
+            name: 模型名称
+            model_func: 模型函数
+        """
+        self.models[name] = model_func
+    
+    async def call_model(self, model_name: str, **kwargs) -> Any:
+        """
+        调用模型
+        
+        Args:
+            model_name: 模型名称
+            **kwargs: 模型参数
+            
+        Returns:
+            模型输出结果
+        """
+        if model_name not in self.models:
+            raise ValueError(f"模型 {model_name} 不存在")
+        
+        model_func = self.models[model_name]
+        return await model_func(**kwargs)
+    
+    async def start(self):
+        """启动模型服务器"""
+        self.running = True
+        print(f"模型服务器启动在端口 {self.port}")
+    
+    async def stop(self):
+        """停止模型服务器"""
+        self.running = False
+        print("模型服务器已停止")
+
 
 app = FastMCP('qka')
 

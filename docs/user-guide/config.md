@@ -311,10 +311,12 @@ backup_config()
 
 ## API 参考
 
-::: qka.core.config.Config
-    options:
-      show_source: false
-      
-::: qka.core.config.load_config
+配置管理的详细API参考请查看 [Config API文档](../api/core/config.md)。
 
-::: qka.core.config.create_sample_config
+### 主要类和函数
+
+- **Config** - 主配置管理类
+- **load_config** - 加载配置函数
+- **create_sample_config** - 创建示例配置函数
+
+更多详细信息和使用示例请参考API文档页面。

@@ -131,18 +131,50 @@ nav:
     - 事件系统: user-guide/events.md
     - 日志系统: user-guide/logging.md
   - API参考:
-    - 核心模块: api/core.md
-    - 数据模块: api/data.md
-    - 回测模块: api/backtest.md
-    - 交易模块: api/trading.md
-    - 工具模块: api/utils.md
+    - API概览: api/index.md
+    - Core模块:
+      - 模块概览: api/core/index.md
+      - 配置管理: api/core/config.md
+      - 事件系统: api/core/events.md
+      - 回测引擎: api/core/backtest.md
+      - 数据处理: api/core/data.md
+      - 绘图工具: api/core/plot.md
+    - Utils模块:
+      - 模块概览: api/utils/index.md
+      - 日志系统: api/utils/logger.md
+      - 通用工具: api/utils/tools.md
+      - 动画工具: api/utils/anis.md
+      - 通用函数: api/utils/util.md
+    - Brokers模块:
+      - 模块概览: api/brokers/index.md
+      - 交易客户端: api/brokers/client.md
+      - 交易服务器: api/brokers/server.md
+      - 交易执行: api/brokers/trade.md
+    - MCP模块:
+      - 模块概览: api/mcp/index.md
+      - API接口: api/mcp/api.md
+      - 服务器实现: api/mcp/server.md
   - 示例教程:
-    - 简单策略: examples/simple-strategy.md
-    - 技术指标: examples/indicators.md
-    - 多因子策略: examples/multi-factor.md
-    - 风险管理: examples/risk-management.md
+    - 示例概览: examples/index.md
+    - 基础示例:
+      - 第一个策略: examples/basic/first-strategy.md
+      - 数据获取: examples/basic/data-fetching.md
+      - 简单回测: examples/basic/simple-backtest.md
+    - 进阶示例:
+      - 事件驱动策略: examples/advanced/event-driven.md
+      - 多资产策略: examples/advanced/multi-asset.md
+      - 风险管理: examples/advanced/risk-management.md
+    - 完整案例:
+      - 动量策略: examples/complete/momentum-strategy.md
+      - 均值回归策略: examples/complete/mean-reversion.md
+      - 配对交易: examples/complete/pairs-trading.md
   - 开发指南:
+    - 开发概览: development/index.md
     - 架构设计: development/architecture.md
-    - 插件开发: development/plugins.md
+    - 开发环境: development/development-setup.md
+    - 编码规范: development/coding-standards.md
+    - API设计: development/api-design.md
+    - 测试指南: development/testing.md
+    - 部署指南: development/deployment.md
     - 贡献指南: development/contributing.md
   - 更新日志: changelog.md
