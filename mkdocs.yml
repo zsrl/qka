@@ -1,0 +1,148 @@
+site_name: QKA - 快量化文档
+site_description: 快捷量化助手（Quick Quantitative Assistant）- 简洁易用的A股量化交易框架
+site_author: QKA Team
+site_url: https://your-username.github.io/qka
+
+# Repository
+repo_name: qka
+repo_url: https://github.com/your-username/qka
+edit_uri: edit/main/docs/
+
+# Copyright
+copyright: Copyright &copy; 2024 QKA Team
+
+# Configuration
+theme:
+  name: material
+  language: zh
+  palette:
+    # 浅色模式
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-7
+        name: 切换至深色模式
+    # 深色模式
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-4
+        name: 切换至浅色模式
+  
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.path
+    - navigation.top
+    - search.highlight
+    - search.suggest
+    - content.tabs.link
+    - content.code.copy
+    - content.code.annotate
+
+  icon:
+    repo: fontawesome/brands/github
+    edit: material/pencil
+    view: material/eye
+
+# Plugins
+plugins:
+  - search:
+      lang: zh
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            show_symbol_type_heading: true
+            members_order: source
+
+# Extensions
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.betterem:
+      smart_enable: all
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.magiclink:
+      repo_url_shorthand: true
+      user: your-username
+      repo: qka
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+
+# Extra
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/your-username/qka
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/qka
+  
+  version:
+    provider: mike
+
+# Navigation
+nav:
+  - 首页: index.md
+  - 快速开始:
+    - 安装指南: getting-started/installation.md
+    - 第一个策略: getting-started/first-strategy.md
+    - 基础概念: getting-started/concepts.md
+  - 用户指南:
+    - 数据获取: user-guide/data.md
+    - 策略开发: user-guide/strategy.md
+    - 回测分析: user-guide/backtest.md
+    - 实盘交易: user-guide/trading.md
+    - 配置管理: user-guide/config.md
+    - 事件系统: user-guide/events.md
+    - 日志系统: user-guide/logging.md
+  - API参考:
+    - 核心模块: api/core.md
+    - 数据模块: api/data.md
+    - 回测模块: api/backtest.md
+    - 交易模块: api/trading.md
+    - 工具模块: api/utils.md
+  - 示例教程:
+    - 简单策略: examples/simple-strategy.md
+    - 技术指标: examples/indicators.md
+    - 多因子策略: examples/multi-factor.md
+    - 风险管理: examples/risk-management.md
+  - 开发指南:
+    - 架构设计: development/architecture.md
+    - 插件开发: development/plugins.md
+    - 贡献指南: development/contributing.md
+  - 更新日志: changelog.md

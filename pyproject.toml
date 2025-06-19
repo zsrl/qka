@@ -12,10 +12,16 @@ license = {file = "LICENSE"}
 classifiers = ["License :: OSI Approved :: MIT License"]
 dependencies = [
     "akshare>=1.16.93",
+    "fastapi>=0.115.13",
     "flask>=3.1.1",
     "mcp[cli]>=1.9.0",
+    "mkdocs>=1.6.1",
+    "mkdocs-material>=9.6.14",
+    "mkdocstrings>=0.29.1",
+    "mkdocstrings-python>=1.16.12",
     "nbformat>=5.10.4",
     "plotly>=6.1.1",
+    "uvicorn>=0.34.3",
     "xtquant>=241014.1.2",
 ]
 # 依赖移到requirements.txt，便于uv管理

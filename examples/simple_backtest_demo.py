@@ -3,11 +3,7 @@ QKA 简化回测API演示 - 极简版本
 只需3步：获取数据 -> 定义策略 -> 运行回测
 """
 
-import sys
-import os
 import pandas as pd
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from qka.core.data import data
 from qka.core.backtest import backtest, Strategy
 from qka.core.plot import plot_backtest
