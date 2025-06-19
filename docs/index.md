@@ -87,37 +87,37 @@ pip install qka
 
 <div class="grid cards" markdown>
 
--   :material-database:{ .lg .middle } __数据管理__
+-   📊 **数据管理**
 
     ---
 
     支持多种数据源，自动缓存，数据质量检查
 
-    [:octicons-arrow-right-24: 了解更多](user-guide/data.md)
+    [→ 了解更多](user-guide/data.md)
 
--   :material-brain:{ .lg .middle } __策略开发__
+-   🧠 **策略开发**
 
     ---
 
     简洁的策略框架，丰富的技术指标，事件驱动
 
-    [:octicons-arrow-right-24: 了解更多](user-guide/strategy.md)
+    [→ 了解更多](user-guide/strategy.md)
 
--   :material-chart-line:{ .lg .middle } __回测分析__
+-   📈 **回测分析**
 
     ---
 
     高效的回测引擎，详细的绩效分析，可视化图表
 
-    [:octicons-arrow-right-24: 了解更多](user-guide/backtest.md)
+    [→ 了解更多](user-guide/backtest.md)
 
--   :material-rocket-launch:{ .lg .middle } __实盘交易__
+-   🚀 **实盘交易**
 
     ---
 
     直接对接QMT，支持A股实盘交易，风险控制
 
-    [:octicons-arrow-right-24: 了解更多](user-guide/trading.md)
+    [→ 了解更多](user-guide/trading.md)
 
 </div>
 
@@ -167,11 +167,9 @@ graph TB
 | v0.4.x | 📋 规划中 | 策略优化、风险管理、指标库 |
 | v1.0.x | 📋 规划中 | 稳定版本、完整文档、生态 |
 
-## 🤝 社区
+## 🐛 问题反馈
 
-- 💬 **讨论交流** - [GitHub Discussions](https://github.com/your-username/qka/discussions)
-- 🐛 **问题反馈** - [GitHub Issues](https://github.com/your-username/qka/issues)
-- 📧 **联系邮箱** - mayuanchi1029@gmail.com
+- [GitHub Issues](https://github.com/zsrl/qka/issues) - 报告bug或提出功能建议
 
 ---
 
