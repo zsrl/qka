@@ -4,46 +4,66 @@ build-backend = "hatchling.build"
 
 [project]
 name = "qka"
-version = "0.1.0"
-description = ""
+dynamic = ["version"]
+description = "快捷量化助手（Quick Quantitative Assistant）- 简洁易用的A股量化交易框架"
 authors = [{name = "myc", email = "mayuanchi1029@gmail.com"}]
 readme = "README.md"
 license = {file = "LICENSE"}
-classifiers = ["License :: OSI Approved :: MIT License"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+requires-python = ">=3.10"
 dependencies = [
     "akshare>=1.16.93",
     "fastapi>=0.115.13",
     "flask>=3.1.1",
     "mcp[cli]>=1.9.0",
-    "mkdocs>=1.6.1",
-    "mkdocs-material>=9.6.14",
-    "mkdocstrings>=0.29.1",
-    "mkdocstrings-python>=1.16.12",
     "nbformat>=5.10.4",
     "plotly>=6.1.1",
     "uvicorn>=0.34.3",
     "xtquant>=241014.1.2",
     "ipykernel>=6.29.5",
 ]
-# 依赖移到requirements.txt，便于uv管理
+
+[project.optional-dependencies]
+dev = [
+    "mkdocs>=1.6.1",
+    "mkdocs-material>=9.6.14",
+    "mkdocstrings>=0.29.1",
+    "mkdocstrings-python>=1.16.12",
+    "python-semantic-release>=9.0.0",
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
 
 [project.urls]
 Home = "https://github.com/zsrl/qka"
+Documentation = "https://zsrl.github.io/qka"
+Repository = "https://github.com/zsrl/qka"
+Issues = "https://github.com/zsrl/qka/issues"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.targets.wheel]
+packages = ["qka"]
 
 [tool.semantic_release]
-version_toml = [
-    "pyproject.toml:project.version"
-]
-
+version_source = "tag"
+build_command = "uv build"
 branch = "main"
-upload_to_PyPI = true
+upload_to_PyPI = false  # We handle PyPI upload separately in GitHub Actions
 upload_to_release = true
 commit_author = "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
 
 [tool.semantic_release.commit_parser_options]
 allowed_tags = [
     "build",
-    "chore",
+    "chore", 
     "ci",
     "docs",
     "feat",
@@ -55,3 +75,6 @@ allowed_tags = [
 ]
 minor_tags = ["feat"]
 patch_tags = ["fix", "perf"]
+
+[tool.semantic_release.changelog]
+changelog_file = "CHANGELOG.md"
