@@ -130,6 +130,8 @@ nav:
     - 配置管理: user-guide/config.md
     - 事件系统: user-guide/events.md
     - 日志系统: user-guide/logging.md
+  - 参考资料:
+    - A股市场证券代码命名规则: A股市场证券代码命名规则.md
   - API参考:
     - API概览: api/index.md
     - Core模块:
@@ -168,13 +170,4 @@ nav:
       - 动量策略: examples/complete/momentum-strategy.md
       - 均值回归策略: examples/complete/mean-reversion.md
       - 配对交易: examples/complete/pairs-trading.md
-  - 开发指南:
-    - 开发概览: development/index.md
-    - 架构设计: development/architecture.md
-    - 开发环境: development/development-setup.md
-    - 编码规范: development/coding-standards.md
-    - API设计: development/api-design.md
-    - 测试指南: development/testing.md
-    - 部署指南: development/deployment.md
-    - 贡献指南: development/contributing.md
   - 更新日志: changelog.md
