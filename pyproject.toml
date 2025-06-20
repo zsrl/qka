@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
@@ -38,6 +38,7 @@ dev = [
     "python-semantic-release>=9.0.0",
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
+    "hatch-vcs>=0.3.0",
 ]
 
 [project.urls]
