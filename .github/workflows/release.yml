@@ -39,15 +39,18 @@ jobs:
           # Check if there are any releasable changes
           if uv run semantic-release --noop --strict version; then
             echo "release_needed=true" >> $GITHUB_OUTPUT
+            echo "Release will be created"
           else
             echo "release_needed=false" >> $GITHUB_OUTPUT
+            echo "No release needed"
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create release
+      - name: Create release and tag
         if: steps.release-check.outputs.release_needed == 'true'
         run: |
+          # This will create a proper Git tag (e.g., v0.1.1)
           uv run semantic-release version
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -55,6 +58,7 @@ jobs:
       - name: Build package
         if: steps.release-check.outputs.release_needed == 'true'
         run: |
+          # Now hatch-vcs will use the clean tag version
           uv build
 
       - name: Publish to PyPI
