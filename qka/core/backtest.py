@@ -7,6 +7,8 @@ from abc import ABC, abstractmethod
 import warnings
 warnings.filterwarnings('ignore')
 
+from qka.core.data.base import Data
+
 class Strategy(ABC):
     """策略基类"""
     
@@ -78,10 +80,9 @@ class Broker:
             self.positions[symbol] = new_shares
             self.avg_costs[symbol] = new_avg_cost
             self.cash -= total_cost
-            
-            # 记录交易
+              # 记录交易
             self.trades.append({
-                'date': datetime.now(),
+                'date': getattr(self, 'current_date', datetime.now()),
                 'symbol': symbol,
                 'action': 'buy',
                 'shares': shares,
@@ -107,7 +108,7 @@ class Broker:
             return False
             
         if amount <= 1:  # 按比例卖出
-            sell_shares = int(current_shares * amount / 100) * 100
+            sell_shares = int(current_shares * amount)
         else:  # 按股数卖出
             sell_shares = min(int(amount / 100) * 100, current_shares)
             
@@ -126,10 +127,9 @@ class Broker:
                 del self.avg_costs[symbol]
                 
         self.cash += net_proceeds
-        
-        # 记录交易
+          # 记录交易
         self.trades.append({
-            'date': datetime.now(),
+            'date': getattr(self, 'current_date', datetime.now()),
             'symbol': symbol,
             'action': 'sell',
             'shares': sell_shares,
@@ -158,13 +158,13 @@ class Broker:
         """获取所有持仓"""
         return self.positions.copy()
 
-def backtest(data, strategy: Strategy, broker: Optional[Broker] = None, 
+def backtest(data: Data, strategy: Strategy, broker: Optional[Broker] = None, 
              start_time: str = '', end_time: str = '') -> Dict[str, Any]:
     """
     简化的回测函数
     
     Args:
-        data: 数据对象或数据字典
+        data: 数据对象
         strategy: 策略对象
         broker: 交易接口，为None时使用默认设置
         start_time: 开始时间 'YYYY-MM-DD'
@@ -172,37 +172,9 @@ def backtest(data, strategy: Strategy, broker: Optional[Broker] = None,
     
     Returns:
         回测结果字典
-    
-    Examples:
-        # 基本用法
-        from qka.core.data import data
-        from qka.core.backtest import backtest, Strategy
-        
-        class MyStrategy(Strategy):
-            def on_bar(self, data, broker, current_date):
-                for symbol, df in data.items():
-                    if len(df) >= 20:
-                        price = df['close'].iloc[-1]
-                        ma20 = df['close'].rolling(20).mean().iloc[-1]
-                        
-                        if price > ma20 and broker.get_position(symbol) == 0:
-                            broker.buy(symbol, 0.2, price)  # 买入20%资金
-                        elif price < ma20 and broker.get_position(symbol) > 0:
-                            broker.sell(symbol, 1.0, price)  # 全部卖出
-        
-        # 获取数据
-        data_obj = data('akshare', stocks=['000001', '600000'])
-        hist_data = data_obj.get(start_time='2023-01-01', end_time='2023-12-31')
-        
-        # 运行回测
-        result = backtest(hist_data, MyStrategy(), start_time='2023-01-01', end_time='2023-12-31')
-        print(f"总收益率: {result['total_return']:.2%}")
     """
-      # 处理数据
-    if hasattr(data, 'get'):  # 数据对象
-        historical_data = data.get(period='1d', start_time=start_time, end_time=end_time)
-    else:  # 直接传入的数据字典
-        historical_data = data
+    # 获取历史数据
+    historical_data = data.get(period='1d', start_time=start_time, end_time=end_time)
     
     if not historical_data:
         raise ValueError("未获取到有效数据")
@@ -308,18 +280,17 @@ def _calculate_performance(broker: Broker) -> Dict[str, Any]:
     peak = pd.Series(values).expanding().max()
     drawdown = (pd.Series(values) - peak) / peak
     max_drawdown = drawdown.min()
-    
-    # 交易统计
+      # 交易统计
     trades = broker.trades
     total_trades = len(trades)
     total_commission = sum(trade['commission'] for trade in trades)
     
     # 简化的胜率计算
     profitable_trades = 0
-    if total_trades > 0:
-        buy_trades = [t for t in trades if t['action'] == 'buy']
-        sell_trades = [t for t in trades if t['action'] == 'sell']
-        
+    buy_trades = [t for t in trades if t['action'] == 'buy']
+    sell_trades = [t for t in trades if t['action'] == 'sell']
+    
+    if total_trades > 0 and sell_trades:
         for sell_trade in sell_trades:
             symbol = sell_trade['symbol']
             sell_date = sell_trade['date']

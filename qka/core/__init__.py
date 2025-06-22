@@ -7,11 +7,11 @@ from .data import data
 from .backtest import backtest, Strategy
 from .config import config, load_config
 from .events import EventType, event_engine, emit_event, start_event_engine, stop_event_engine
-from .plot import plot_backtest
+from .plot import plot
 
 __all__ = [
     'data', 'backtest', 'Strategy',
     'config', 'load_config',
     'EventType', 'event_engine', 'emit_event', 'start_event_engine', 'stop_event_engine',
-    'plot_backtest'
+    'plot'
 ]

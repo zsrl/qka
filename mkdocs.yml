@@ -124,7 +124,6 @@ nav:
     - 基础概念: getting-started/concepts.md
   - 用户指南:
     - 数据获取: user-guide/data.md
-    - 策略开发: user-guide/strategy.md
     - 回测分析: user-guide/backtest.md
     - 实盘交易: user-guide/trading.md
     - 配置管理: user-guide/config.md
