@@ -6,7 +6,7 @@ QKA数据模块基础功能
 
 from abc import ABC, abstractmethod
 import pandas as pd
-from typing import List, Dict
+from typing import List, Dict, Tuple, Optional
 from qka.utils.logger import logger
 
 # ============================================================================
@@ -22,15 +22,6 @@ def set_source(source: str) -> None:
     
     Args:
         source: 数据源类型 ('qmt', 'akshare')
-    
-    Examples:
-        import qka
-        
-        # 设置默认使用QMT数据源
-        qka.set_source('qmt')
-        
-        # 之后创建数据对象就不需要指定source了
-        data_obj = qka.data(stocks=['000001.SZ', '600000.SH'])
     """
     global _DEFAULT_DATA_SOURCE
     
@@ -68,10 +59,6 @@ def register_data_source(name: str, data_source_class):
     Args:
         name: 数据源名称
         data_source_class: 数据源类（必须继承DataSource）
-    
-    Examples:
-        # 注册新的数据源
-        register_data_source('tushare', TushareData)
     """
     if not issubclass(data_source_class, DataSource):
         raise TypeError(f"数据源类 {data_source_class} 必须继承 DataSource")
@@ -125,16 +112,33 @@ class DataSource(ABC):
 class Data:
     """统一数据接口"""
     
-    def __init__(self, source: str = 'akshare', stocks: List[str] = None, sector: str = None):
+    def __init__(
+        self, 
+        time_range: Tuple[str, str] = None,
+        symbols: List[str] = None,
+        period: str = '1d',
+        factors: List[str] = None,
+        source: str = None
+    ):
         """
         初始化数据对象
         
         Args:
-            source: 数据源类型 ('qmt', 'akshare')
-            stocks: 股票代码列表
-            sector: 板块名称
+            time_range: 时间范围，格式为 ('开始时间', '结束时间')
+            symbols: 股票代码列表
+            period: 数据周期，如 '1m', '5m', '1d' 等
+            factors: 数据因子列表，如 ['open', 'high', 'low', 'close', 'volume']
+            source: 数据源类型 ('qmt', 'akshare')，可选参数，如果不指定则使用全局默认数据源
         """
+        # 如果没有指定source，使用全局默认数据源
+        if source is None:
+            source = _DEFAULT_DATA_SOURCE
+            
         self.source_type = source
+        self.time_range = time_range
+        self.symbols = symbols or []
+        self.period = period
+        self.factors = factors or ['open', 'high', 'low', 'close', 'volume']
         
         if source.lower() not in DATA_SOURCE_MAPPING:
             available_sources = ', '.join(DATA_SOURCE_MAPPING.keys())
@@ -142,7 +146,7 @@ class Data:
         
         # 动态创建数据源实例
         data_source_class = DATA_SOURCE_MAPPING[source.lower()]
-        self.data_source = data_source_class(stocks, sector)
+        self.data_source = data_source_class(symbols)
     
     def get(self, period: str = '1d', start_time: str = '', end_time: str = '') -> Dict[str, pd.DataFrame]:
         """获取历史数据"""
@@ -155,50 +159,10 @@ class Data:
     @property
     def stocks(self) -> List[str]:
         """获取股票列表"""
-        return self.data_source.stocks
+        return self.symbols
 
 # ============================================================================
-# 5. 工厂函数
-# ============================================================================
-
-def data(stocks=None, sector=None, source=None):
-    """
-    创建数据对象的工厂函数
-    
-    Args:
-        stocks: 股票代码列表
-        sector: 板块名称
-        source: 数据源类型 ('qmt', 'akshare')，可选参数，如果不指定则使用全局默认数据源
-    
-    Returns:
-        Data对象
-        
-    Examples:
-        import qka
-        
-        # 设置默认数据源
-        qka.set_source('qmt')
-        
-        # 使用默认数据源创建数据对象
-        data_obj = qka.data(stocks=['000001.SZ', '600000.SH'])
-        
-        # 临时指定其他数据源
-        data_ak = qka.data(stocks=['000001', '600000'], source='akshare')
-        
-        # 获取板块数据
-        data_sector = qka.data(sector='沪深A股')
-        
-        # 获取历史数据
-        hist_data = data_obj.get('1d', '2024-01-01', '2024-12-31')
-    """
-    # 如果没有指定source，使用全局默认数据源
-    if source is None:
-        source = _DEFAULT_DATA_SOURCE
-    
-    return Data(source, stocks, sector)
-
-# ============================================================================
-# 6. 初始化数据源映射
+# 5. 初始化数据源映射
 # ============================================================================
 
 def _initialize_data_sources():

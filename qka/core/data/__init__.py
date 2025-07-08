@@ -12,7 +12,12 @@ QKA数据模块
     qka.set_source('qmt')
     
     # 创建数据对象
-    data_obj = qka.data(stocks=['000001.SZ', '600000.SH'])
+    data_obj = qka.Data(
+        time_range=('2023-01-01', '2023-12-31'),
+        symbols=['000001.SZ', '600000.SH'],
+        period='1d',
+        factors=['open', 'high', 'low', 'close', 'volume']
+    )
     
     # 获取历史数据
     hist_data = data_obj.get('1d', '2024-01-01', '2024-12-31')
@@ -22,7 +27,6 @@ QKA数据模块
 from .base import (
     set_source, 
     get_source, 
-    data,
     Data,
     register_data_source,
     get_available_sources
@@ -32,7 +36,7 @@ from .base import (
 __all__ = [
     'set_source', 
     'get_source', 
-    'data',
+    'Data',
     'register_data_source',
     'get_available_sources'
 ]
