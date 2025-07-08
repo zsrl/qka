@@ -1,32 +1,44 @@
 import time
 from datetime import datetime
-from typing import List, Dict
+from typing import List, Dict, Tuple
 import pandas as pd
 from qka.utils.logger import logger
-from .base import DataSource
+from .base import DataBase
 
-class QMTData(DataSource):
+class QMTData(DataBase):
     """QMT数据源"""
     
-    def __init__(self, stocks: List[str] = None, sector: str = None):
-        super().__init__(stocks, sector)
+    def __init__(
+        self, 
+        time_range: Tuple[str, str] = None,
+        symbols: List[str] = None,
+        period: str = '1d',
+        factors: List[str] = None
+    ):
+        super().__init__(time_range, symbols, period, factors)
         try:
             from xtquant import xtdata
             self.xtdata = xtdata
-            if sector is not None:
-                self.stocks = xtdata.get_stock_list_in_sector(sector)
         except ImportError:
             logger.error("无法导入xtquant，请检查QMT是否正确安装")
             raise
     
-    def get_historical_data(self, period: str = '1d', start_time: str = '', end_time: str = '') -> Dict[str, pd.DataFrame]:
+    
+    def get(self, period: str = None, start_time: str = '', end_time: str = '') -> Dict[str, pd.DataFrame]:
         """获取QMT历史数据"""
-        if not self.stocks:
+        if not self.symbols:
             logger.warning("未指定股票列表")
             return {}
+        
+        # 使用传入的参数或初始化时的参数
+        if period is None:
+            period = self.period
+            
+        if not start_time and not end_time and self.time_range:
+            start_time, end_time = self.time_range
             
         # 下载数据
-        for stock in self.stocks:
+        for stock in self.symbols:
             self.xtdata.download_history_data(
                 stock_code=stock, 
                 period=period, 
@@ -37,7 +49,7 @@ class QMTData(DataSource):
         
         # 获取本地数据
         res = self.xtdata.get_local_data(
-            stock_list=self.stocks, 
+            stock_list=self.symbols, 
             period=period, 
             start_time=start_time, 
             end_time=end_time
@@ -45,7 +57,8 @@ class QMTData(DataSource):
         
         return self.normalize_data(res)
     
-    def subscribe_realtime(self, callback):
+    
+    def subscribe(self, callback):
         """订阅QMT实时数据"""
         delays = []
 
@@ -60,5 +73,5 @@ class QMTData(DataSource):
                         logger.warning(f'{code} 延迟 {delay_seconds}')
                     callback(code, item)
 
-        self.xtdata.subscribe_whole_quote(code_list=self.stocks, callback=task)
+        self.xtdata.subscribe_whole_quote(code_list=self.symbols, callback=task)
         self.xtdata.run()

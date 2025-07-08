@@ -1,43 +1,40 @@
 from datetime import datetime, timedelta
-from typing import List, Dict
+from typing import List, Dict, Tuple
 import pandas as pd
 from qka.utils.logger import logger
-from .base import DataSource
+from .base import DataBase
 
-class AkshareData(DataSource):
+class AkshareData(DataBase):
     """Akshare数据源"""
     
-    def __init__(self, stocks: List[str] = None, sector: str = None):
-        super().__init__(stocks, sector)
+    def __init__(
+        self, 
+        time_range: Tuple[str, str] = None,
+        symbols: List[str] = None,
+        period: str = '1d',
+        factors: List[str] = None
+    ):
+        super().__init__(time_range, symbols, period, factors)
         try:
             import akshare as ak
             self.ak = ak
         except ImportError:
             logger.error("无法导入akshare，请安装: pip install akshare")
             raise
-            
-        if sector is not None:
-            self.stocks = self._get_stocks_by_sector(sector)
     
-    def _get_stocks_by_sector(self, sector: str) -> List[str]:
-        """根据板块获取股票列表"""
-        try:
-            if sector == "沪深A股":
-                # 获取沪深A股列表
-                stock_info = self.ak.stock_info_a_code_name()
-                return stock_info['code'].tolist()[:100]  # 限制数量避免过多
-            else:
-                logger.warning(f"暂不支持板块: {sector}")
-                return []
-        except Exception as e:
-            logger.error(f"获取板块股票失败: {e}")
-            return []
     
-    def get_historical_data(self, period: str = '1d', start_time: str = '', end_time: str = '') -> Dict[str, pd.DataFrame]:
+    def get(self, period: str = None, start_time: str = '', end_time: str = '') -> Dict[str, pd.DataFrame]:
         """获取Akshare历史数据"""
-        if not self.stocks:
+        if not self.symbols:
             logger.warning("未指定股票列表")
             return {}
+        
+        # 使用传入的参数或初始化时的参数
+        if period is None:
+            period = self.period
+            
+        if not start_time and not end_time and self.time_range:
+            start_time, end_time = self.time_range
         
         result = {}
         
@@ -52,7 +49,7 @@ class AkshareData(DataSource):
         else:
             end_date = datetime.now().strftime('%Y%m%d')
         
-        for stock in self.stocks:
+        for stock in self.symbols:
             try:
                 # 转换股票代码格式
                 if '.' in stock:
@@ -100,7 +97,7 @@ class AkshareData(DataSource):
         
         return self.normalize_data(result)
     
-    def subscribe_realtime(self, callback):
+    def subscribe(self, callback):
         """Akshare暂不支持实时数据订阅"""
         logger.warning("Akshare数据源暂不支持实时数据订阅")
         raise NotImplementedError("Akshare数据源暂不支持实时数据订阅")
