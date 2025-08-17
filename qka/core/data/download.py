@@ -50,7 +50,7 @@ class Downloader:
             force_download: 若为 True 则忽略本地缓存，强制重新下载
         """
         out: Dict[str, pd.DataFrame] = {}
-        target_dir = self.cache_root / "akshare" / period
+        target_dir = self.cache_root / "akshare" / period / (adjust or "bfq")
         target_dir.mkdir(parents=True, exist_ok=True)
 
         column_mapping = {
@@ -85,10 +85,17 @@ class Downloader:
                     df["date"] = pd.to_datetime(df["date"])
                     df = df.set_index("date")
 
-                # 确保数值列为数值类型
-                numeric_cols = [c for c in ("open", "high", "low", "close", "volume") if c in df.columns]
+                # 确保数值列为数值类型（包括 amount）
+                numeric_cols = [c for c in ("open", "high", "low", "close", "volume", "amount") if c in df.columns]
                 for col in numeric_cols:
                     df[col] = pd.to_numeric(df[col], errors="coerce")
+
+                # 只保留 column_mapping 中定义的列，其他列都丢弃
+                # 从 column_mapping 中获取所有映射后的列名
+                mapped_columns = list(column_mapping.values())
+                # 只保留这些列，如果列存在的话
+                available_columns = [col for col in mapped_columns if col in df.columns]
+                df = df[available_columns]
 
                 df.to_parquet(path)
 
