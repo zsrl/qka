@@ -27,6 +27,7 @@ dependencies = [
     "uvicorn>=0.34.3",
     "xtquant>=241014.1.2",
     "ipykernel>=6.29.5",
+    "pyarrow>=21.0.0",
 ]
 
 [project.optional-dependencies]

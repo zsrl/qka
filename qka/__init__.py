@@ -12,7 +12,7 @@ except PackageNotFoundError:
     __version__ = "0.1.0"  # fallback version
 
 # 核心功能直接导入
-from qka.core.data import data, set_source, get_source, register_data_source, get_available_sources
+from qka.core.data import Data, config
 from qka.core.backtest import backtest, Strategy, Broker
 from qka.core.config import config, load_config
 from qka.core.events import event_engine, emit_event
@@ -28,11 +28,9 @@ from qka import core, utils, mcp
 
 __all__ = [
     # 核心功能
-    'data', 'backtest', 'Strategy', 'Broker', 'plot',
+    'Data', 'backtest', 'Strategy', 'Broker', 'plot',
     # 配置
     'config', 'load_config',
-    # 数据源管理
-    'set_source', 'get_source', 'register_data_source', 'get_available_sources',
     # 事件系统
     'event_engine', 'emit_event',
     # 子模块
