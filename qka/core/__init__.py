@@ -5,7 +5,7 @@ QKA Core 模块
 
 
 # 数据相关
-from .data import Data, config as data_config
+from .data import Data
 # 回测相关
 from .backtest import backtest, Strategy, Broker
 # 配置相关
@@ -17,7 +17,7 @@ from .plot import plot
 
 __all__ = [
     # 数据相关
-    'Data','data_config',
+    'Data',
     # 回测相关
     'backtest', 'Strategy', 'Broker',
     # 配置

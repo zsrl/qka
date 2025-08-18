@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 import warnings
 warnings.filterwarnings('ignore')
 
-from qka.core.data.base import Data
+from qka.core.data import Data
 
 class Strategy(ABC):
     """策略基类"""

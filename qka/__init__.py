@@ -12,7 +12,7 @@ except PackageNotFoundError:
     __version__ = "0.1.0"  # fallback version
 
 # 核心功能直接导入
-from qka.core.data import Data, config
+from qka.core.data import Data
 from qka.core.backtest import backtest, Strategy, Broker
 from qka.core.config import config, load_config
 from qka.core.events import event_engine, emit_event
