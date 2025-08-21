@@ -58,8 +58,8 @@ class Backtest:
                 continue
                 
             # 调用策略的onbar方法
-            if hasattr(self.strategy, 'onbar'):
-                self.strategy.onbar(timestamp, cross_section_data)
+            if hasattr(self.strategy, 'on_bar'):
+                self.strategy.on_bar(timestamp, cross_section_data)
 
     def _get_benchmark_timestamps(self, all_data: Dict[str, pd.DataFrame]) -> List[datetime]:
         """

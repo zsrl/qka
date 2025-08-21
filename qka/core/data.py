@@ -5,6 +5,7 @@ QKA数据模块基础功能
 """
 
 from pathlib import Path
+from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import pyarrow as pa
@@ -23,7 +24,7 @@ class Data():
         adjust: str = 'qfq',
         factors: Optional[List[str]] = None,
         source: str = 'akshare',
-        pool_size: int = 4,
+        pool_size: int = 20,
         cache_root: Optional[Path] = None
     ):
         """
@@ -112,7 +113,6 @@ class Data():
             if df is not None and not df.empty:
                 # 保存到缓存
                 self._save_to_cache(df.reset_index(), path)
-                logger.info(f"已保存 {symbol} 到缓存: {path} (rows={len(df)})")
                 return symbol, df
             
             return symbol, pd.DataFrame()
@@ -142,11 +142,15 @@ class Data():
                 executor.submit(self._download_single_symbol, symbol, target_dir, force_download): symbol
                 for symbol in self.symbols
             }
+
+            # 添加tqdm进度条
+            with tqdm(total=len(self.symbols), desc="下载数据") as pbar:
+                for future in as_completed(future_to_symbol):
+                    symbol, df = future.result()
+                    results[symbol] = df
+                    pbar.update(1)
+                    pbar.set_postfix_str(f"当前: {symbol}")
             
-            # 收集结果
-            for future in as_completed(future_to_symbol):
-                symbol, df = future.result()
-                results[symbol] = df
 
         return results
 
