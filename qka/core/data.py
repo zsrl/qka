@@ -78,8 +78,6 @@ class Data():
     def get(self):
         """获取历史数据"""
         # 准备缓存目录
-        
-        paths = []
 
         with ThreadPoolExecutor(max_workers=self.pool_size) as executor:
             # 提交下载任务
@@ -92,22 +90,18 @@ class Data():
             with tqdm(total=len(self.symbols), desc="下载数据") as pbar:
                 for future in as_completed(futures):
                     symbol = futures[future]
-                    paths.append(str(future.result()))
                     pbar.update(1)
                     pbar.set_postfix_str(f"当前: {symbol}")
-        
 
-        df = dd.read_parquet(paths)
+        dfs = []
+        for symbol in self.symbols:
+            df = dd.read_parquet(str(self.target_dir / f"{symbol}.parquet"))
+            column_mapping = {col: f'{symbol}_{col}' for col in df.columns}
+            dfs.append(df.rename(columns=column_mapping))
 
-        df = df.set_index('date')
+        df = dd.concat(dfs, axis=1, join='outer')
 
-        dfp = df.compute()
-        
-        dates = dfp.index.drop_duplicates()
-
-        df = dd.from_pandas(df.compute(), npartitions=len(dates))
-
-        return df, dates
+        return df
 
     def _get_from_akshare(self, symbol: str) -> pd.DataFrame:
         """从 akshare 获取单个股票的数据。

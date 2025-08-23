@@ -33,9 +33,7 @@ class Backtest:
         执行回测
         """
         # 获取所有股票数据（dask DataFrame）
-        df, timestamps = self.data.get()
+        df = self.data.get()
 
-        for timestamp in timestamps:
-            data = df[timestamp:timestamp].compute()
-
-            self.strategy.on_bar(timestamp, data)
+        for _, row in df.iterrows():
+            print(row)
