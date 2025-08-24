@@ -35,5 +35,9 @@ class Backtest:
         # 获取所有股票数据（dask DataFrame）
         df = self.data.get()
 
-        for _, row in df.iterrows():
-            print(row)
+        for date, row in df.iterrows():
+            def get(factor):
+                s = row[row.index.str.endswith(factor)]
+                s.index = s.index.str.replace(f'_{factor}$', '', regex=True)
+                return s
+            self.strategy.on_bar(date, get)

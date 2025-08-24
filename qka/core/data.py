@@ -23,7 +23,7 @@ class Data():
         adjust: str = 'qfq',
         factors: Optional[List[str]] = None,
         source: str = 'akshare',
-        pool_size: int = 20,
+        pool_size: int = 10,
         datadir: Optional[Path] = None
     ):
         """
@@ -69,6 +69,9 @@ class Data():
             df = self._get_from_akshare(symbol)
         else:
             df = pd.DataFrame()
+
+        if len(df) == 0:
+            return path
 
         table = pa.Table.from_pandas(df)
         pq.write_table(table, path)
@@ -140,9 +143,6 @@ class Data():
         mapped_columns = list(column_mapping.values())
         available_columns = [col for col in mapped_columns if col in df.columns]
         df = df[available_columns]
-
-        # 4. 添加symbol列
-        df['symbol'] = symbol
 
         df = df.set_index('date')
         # 设置索引
