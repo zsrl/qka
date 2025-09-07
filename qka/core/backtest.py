@@ -40,4 +40,9 @@ class Backtest:
                 s = row[row.index.str.endswith(factor)]
                 s.index = s.index.str.replace(f'_{factor}$', '', regex=True)
                 return s
+            
+            # 先调用策略的on_bar（可能包含交易操作）
             self.strategy.on_bar(date, get)
+            
+            # 再调用broker的on_bar记录状态（包含交易后的状态）
+            self.strategy.broker.on_bar(date, get)

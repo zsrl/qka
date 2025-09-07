@@ -10,7 +10,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import akshare as ak
 import dask.dataframe as dd
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Callable
 from qka.utils.logger import logger
 
 class Data():
@@ -21,7 +21,7 @@ class Data():
         symbols: Optional[List[str]] = None,
         period: str = '1d',
         adjust: str = 'qfq',
-        factors: Optional[List[str]] = None,
+        factor: Callable[[pd.DataFrame], pd.DataFrame] = lambda df: df,
         source: str = 'akshare',
         pool_size: int = 10,
         datadir: Optional[Path] = None
@@ -32,7 +32,7 @@ class Data():
         Args:
             symbols: [维度1] 标的，如 ['000001.SZ', '600000.SH']
             period: [维度2] 周期，如 '1m', '5m', '1d' 等
-            factors: [维度3] 因子，如 ['open', 'high', 'low', 'close', 'volume']
+            factor: [维度3] 因子字典，key为因子名，value为因子函数
             source: [维度4] 数据来源 ('qmt', 'akshare')
             pool_size: 并发池大小
             datadir: 缓存根目录，默认为项目根目录下的 datadir
@@ -40,7 +40,7 @@ class Data():
         self.symbols = symbols or []
         self.period = period
         self.adjust = adjust
-        self.factors = factors
+        self.factor = factor
         self.source = source
         self.pool_size = pool_size
 
@@ -99,6 +99,7 @@ class Data():
         dfs = []
         for symbol in self.symbols:
             df = dd.read_parquet(str(self.target_dir / f"{symbol}.parquet"))
+            df = self.factor(df)
             column_mapping = {col: f'{symbol}_{col}' for col in df.columns}
             dfs.append(df.rename(columns=column_mapping))
 

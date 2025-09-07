@@ -1,3 +1,6 @@
+import pandas as pd
+from typing import Dict, List, Any, Optional
+
 class Broker:
     def __init__(self, initial_cash=100000.0):
         """
@@ -9,7 +12,63 @@ class Broker:
         self.cash = initial_cash  # 可用现金
         self.positions = {}       # 持仓记录，格式: {symbol: {'size': 数量, 'avg_price': 平均成本}}
         self.trade_history = []   # 交易历史记录
+        self.timestamp = None     # 当前时间戳
         
+        # 交易记录
+        self.trades = pd.DataFrame(columns=[
+            'cash', 'value', 'total',
+            'positions', 'trades'
+        ])
+        
+    def on_bar(self, date, get):
+        """
+        处理每个bar的数据，记录状态
+        
+        Args:
+            date: 当前时间戳
+            get: 获取因子数据的函数
+        """
+        self.timestamp = date
+        
+        # 获取当前市场价格
+        close_prices = get('close')
+        market_prices = close_prices.to_dict() if hasattr(close_prices, 'to_dict') else {}
+        
+        # 记录状态到trades DataFrame
+        if self.timestamp is None:
+            return
+            
+        # 获取当日交易记录
+        daily_trades = []
+        for trade in self.trade_history:
+            if trade['timestamp'] == self.timestamp:
+                daily_trades.append(trade)
+        
+        # 计算持仓市值
+        position_value = 0.0
+        for symbol, position in self.positions.items():
+            if market_prices and symbol in market_prices:
+                # 使用市场价格计算市值
+                position_value += position['size'] * market_prices[symbol]
+            else:
+                # 使用平均成本估算市值
+                position_value += position['size'] * position['avg_price']
+        
+        # 计算总资产
+        total_assets = self.cash + position_value
+        
+        # 记录状态
+        state_data = {
+            'cash': self.cash,
+            'value': position_value,
+            'total': total_assets,
+            'positions': self.positions.copy(),
+            'trades': daily_trades.copy()
+        }
+        
+        # 添加到trades
+        self.trades.loc[self.timestamp] = state_data
+    
     def buy(self, symbol, price, size):
         """
         买入操作
@@ -61,7 +120,7 @@ class Broker:
             'symbol': symbol,
             'price': price,
             'size': size,
-            'timestamp': self._get_current_time()
+            'timestamp': self.timestamp
         })
         
         print(f"买入成功: {symbol} {size}股 @ {price:.2f}，花费 {required_cash:.2f}")
@@ -109,55 +168,29 @@ class Broker:
             'symbol': symbol,
             'price': price,
             'size': size,
-            'timestamp': self._get_current_time()
+            'timestamp': self.timestamp
         })
         
         print(f"卖出成功: {symbol} {size}股 @ {price:.2f}，获得 {sale_proceeds:.2f}")
         return True
     
-    def get_position(self, symbol):
+    def get(self, factor, timestamp=None):
         """
-        获取指定标的的持仓信息
+        从trades DataFrame中获取数据
         
         Args:
-            symbol (str): 标的代码
+            factor (str): 列名，可选 'cash', 'value', 'total', 'positions', 'trades'
+            timestamp: 时间戳，如果为None则使用当前时间戳
             
         Returns:
-            dict or None: 持仓信息，如果没有持仓则返回None
+            对应列的数据
         """
-        return self.positions.get(symbol)
-    
-    def get_total_assets(self):
-        """
-        获取总资产（现金 + 持仓市值）
+        if timestamp is None:
+            timestamp = self.timestamp
         
-        Returns:
-            float: 总资产价值
-        """
-        total_value = self.cash
-        for symbol, position in self.positions.items():
-            # 这里需要市场价格来计算持仓市值
-            # 暂时使用平均成本作为市值估算
-            total_value += position['size'] * position['avg_price']
-        return total_value
+        if timestamp is None or timestamp not in self.trades.index:
+            return None
+            
+        return self.trades.at[timestamp, factor]
     
-    def _get_current_time(self):
-        """
-        获取当前时间（用于交易记录）
-        
-        Returns:
-            str: 当前时间字符串
-        """
-        from datetime import datetime
-        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    def __str__(self):
-        """
-        返回Broker状态的字符串表示
-        """
-        output = f"现金: {self.cash:.2f}\n"
-        output += f"总资产: {self.get_total_assets():.2f}\n"
-        output += "持仓:\n"
-        for symbol, position in self.positions.items():
-            output += f"  {symbol}: {position['size']}股 @ {position['avg_price']:.2f}\n"
-        return output
