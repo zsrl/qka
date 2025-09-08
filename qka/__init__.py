@@ -15,9 +15,6 @@ except PackageNotFoundError:
 from qka.core.data import Data
 from qka.core.backtest import Backtest
 from qka.core.strategy import Strategy
-from qka.core.config import config, load_config
-from qka.core.events import event_engine, emit_event
-from qka.core.plot import plot
 
 # 子模块导入
 from qka import core, utils, mcp
@@ -29,11 +26,7 @@ from qka import core, utils, mcp
 
 __all__ = [
     # 核心功能
-    'Data', 'Backtest', 'Strategy', 'plot',
-    # 配置
-    'config', 'load_config',
-    # 事件系统
-    'event_engine', 'emit_event',
+    'Data', 'Backtest', 'Strategy',
     # 子模块
     'core', 'utils', 'mcp'
 ]
