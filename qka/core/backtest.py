@@ -1,7 +1,7 @@
 """
 QKA回测引擎模块
 
-提供基于时间序列的回测功能，支持多股票横截面数据处理
+提供基于时间序列的回测功能，支持多股票横截面数据处理，包含完整的交易记录和可视化功能。
 """
 
 import plotly.graph_objects as go
@@ -10,7 +10,11 @@ class Backtest:
     """
     QKA回测引擎类
     
-    提供基于时间序列的回测功能，支持多股票横截面数据处理
+    提供基于时间序列的回测功能，支持多股票横截面数据处理。
+    
+    Attributes:
+        data (Data): 数据对象实例
+        strategy (Strategy): 策略对象实例
     """
     
     def __init__(self, data, strategy):
@@ -18,8 +22,8 @@ class Backtest:
         初始化回测引擎
         
         Args:
-            data: Data类的实例，包含股票数据
-            strategy: 策略对象，必须包含init和onbar方法
+            data (Data): Data类的实例，包含股票数据
+            strategy (Strategy): 策略对象，必须包含on_bar方法
         """
         self.data = data
         self.strategy = strategy
@@ -27,12 +31,24 @@ class Backtest:
     def run(self):
         """
         执行回测
+        
+        遍历所有时间点，在每个时间点调用策略的on_bar方法进行交易决策，
+        并记录交易后的状态。
         """
         # 获取所有股票数据（dask DataFrame）
         df = self.data.get()
 
         for date, row in df.iterrows():
             def get(factor):
+                """
+                获取指定因子的数据
+                
+                Args:
+                    factor (str): 因子名称，如 'close', 'volume' 等
+                    
+                Returns:
+                    pd.Series: 该因子在所有股票上的值
+                """
                 s = row[row.index.str.endswith(factor)]
                 s.index = s.index.str.replace(f'_{factor}$', '', regex=True)
                 return s
@@ -48,10 +64,10 @@ class Backtest:
         绘制回测收益曲线图
         
         Args:
-            title (str): 图表标题
+            title (str): 图表标题，默认为"回测收益曲线"
             
         Returns:
-            plotly.graph_objects.Figure: 交互式图表对象
+            plotly.graph_objects.Figure: 交互式图表对象，如果无数据则返回None
         """
         
         # 获取交易数据
@@ -94,7 +110,6 @@ class Backtest:
         
         # 添加网格线
         fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='LightGrey')
-        fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='LightGrey')
         
         # 显示图表
         fig.show()

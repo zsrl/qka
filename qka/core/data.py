@@ -1,5 +1,7 @@
 """
 QKA数据模块
+
+提供统一的数据获取、缓存和管理功能，支持多数据源、多周期、多因子的数据获取。
 """
 
 from pathlib import Path
@@ -14,7 +16,21 @@ from typing import List, Dict, Optional, Callable
 from qka.utils.logger import logger
 
 class Data():
-    """数据类"""
+    """
+    数据管理类
+    
+    负责股票数据的获取、缓存和管理，支持多数据源、并发下载和自定义因子计算。
+    
+    Attributes:
+        symbols (List[str]): 股票代码列表
+        period (str): 数据周期，如 '1d'、'1m' 等
+        adjust (str): 复权方式，如 'qfq'、'hfq'、'bfq'
+        factor (Callable): 因子计算函数
+        source (str): 数据源，如 'akshare'、'qmt'
+        pool_size (int): 并发下载线程数
+        datadir (Path): 数据缓存目录
+        target_dir (Path): 目标存储目录
+    """
     
     def __init__(
         self, 
@@ -57,9 +73,15 @@ class Data():
         self.target_dir.mkdir(parents=True, exist_ok=True)
 
     def _download(self, symbol: str) -> Path:
-        """下载单个股票的数据"""
-
-
+        """
+        下载单个股票的数据
+        
+        Args:
+            symbol (str): 股票代码
+            
+        Returns:
+            Path: 数据文件路径
+        """
         path = self.target_dir / f"{symbol}.parquet"
 
         if path.exists():
@@ -78,8 +100,15 @@ class Data():
 
         return path
 
-    def get(self):
-        """获取历史数据"""
+    def get(self) -> dd.DataFrame:
+        """
+        获取历史数据
+        
+        并发下载所有股票数据，应用因子计算，并返回合并后的Dask DataFrame。
+        
+        Returns:
+            dd.DataFrame: 合并后的股票数据，每只股票的列名格式为 {symbol}_{column}
+        """
         # 准备缓存目录
 
         with ThreadPoolExecutor(max_workers=self.pool_size) as executor:
@@ -108,13 +137,14 @@ class Data():
         return df
 
     def _get_from_akshare(self, symbol: str) -> pd.DataFrame:
-        """从 akshare 获取单个股票的数据。
+        """
+        从 akshare 获取单个股票的数据。
 
         Args:
-            symbol: 股票代码，支持带后缀如 000001.SZ 或不带后缀的 000001
+            symbol (str): 股票代码，支持带后缀如 000001.SZ 或不带后缀的 000001
 
         Returns:
-            pd.DataFrame: 股票数据，以 date 为索引
+            pd.DataFrame: 股票数据，以 date 为索引，包含 open, high, low, close, volume, amount 列
         """
         column_mapping = {
             "日期": "date",

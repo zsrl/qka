@@ -1,465 +1,342 @@
 # 回测分析
 
-QKA 提供了简洁易用的回测功能，帮助您快速验证交易策略的有效性。
+QKA 提供完整的回测功能，支持策略验证、性能分析和结果可视化。
 
-## 快速开始
+## 基本用法
 
-### 三步完成回测
-
-QKA 回测非常简单，只需三步：
+### 创建回测
 
 ```python
 import qka
 
-# 第1步：获取数据
-data_obj = qka.data(stocks=['000001', '000002'])  # 默认使用akshare数据源
+# 1. 准备数据
+data = qka.Data(symbols=['000001.SZ', '600000.SH'])
 
-# 第2步：定义策略
-class SimpleStrategy(qka.Strategy):
-    def on_bar(self, data, broker, current_date):
-        for symbol, df in data.items():
-            if len(df) >= 20:
-                price = df['close'].iloc[-1]
-                ma20 = df['close'].rolling(20).mean().iloc[-1]
-                
-                if price > ma20:  # 突破均线买入
-                    broker.buy(symbol, 0.5, price)
-                elif price < ma20:  # 跌破均线卖出
-                    broker.sell(symbol, 1.0, price)
-
-# 第3步：运行回测并查看结果
-result = qka.backtest(data_obj, SimpleStrategy(), start_time='2023-01-01', end_time='2023-12-31')
-
-print(f"总收益率: {result['total_return']:.2%}")
-print(f"年化收益率: {result['annual_return']:.2%}")
-print(f"夏普比率: {result['sharpe_ratio']:.2f}")
-```
-
-> **数据源说明**: 默认使用akshare数据源。如需使用其他数据源，可以调用 `set_source('qmt')` 或在 `data()` 函数中指定 `source` 参数。
-
-## 策略开发
-
-### 策略基类
-
-所有策略都需要继承 `qka.Strategy` 基类：
-
-```python
-import qka
-
+# 2. 创建策略
 class MyStrategy(qka.Strategy):
-    def on_bar(self, data, broker, current_date):
-        """
-        每个交易日调用的策略逻辑
-        
-        Args:
-            data: 历史数据字典 {股票代码: DataFrame}
-            broker: 交易接口
-            current_date: 当前日期
-        """
-        # 在这里实现你的策略逻辑
-        pass
-    
-    def on_start(self, broker):
-        """回测开始时调用"""
-        print(f"策略 {self.name} 开始运行")
-    
-    def on_end(self, broker):
-        """回测结束时调用"""
-        print(f"策略 {self.name} 运行结束")
+    def on_bar(self, date, get):
+        close_prices = get('close')
+        # 策略逻辑...
+
+# 3. 运行回测
+strategy = MyStrategy()
+backtest = qka.Backtest(data, strategy)
+backtest.run()
 ```
 
-### 策略示例
-
-#### 移动平均策略
+### 查看回测结果
 
 ```python
-class MovingAverageStrategy(qka.Strategy):
-    def __init__(self, short_window=5, long_window=20):
-        super().__init__()
-        self.short_window = short_window
-        self.long_window = long_window
-    
-    def on_bar(self, data, broker, current_date):
-        for symbol, df in data.items():
-            if len(df) < self.long_window:
-                continue
-                
-            # 计算短期和长期移动平均
-            short_ma = df['close'].rolling(self.short_window).mean().iloc[-1]
-            long_ma = df['close'].rolling(self.long_window).mean().iloc[-1]
-            current_price = df['close'].iloc[-1]
-            
-            # 金叉买入，死叉卖出
-            if short_ma > long_ma and broker.get_position(symbol) == 0:
-                broker.buy(symbol, 0.3, current_price)  # 用30%资金买入
-            elif short_ma < long_ma and broker.get_position(symbol) > 0:
-                broker.sell(symbol, 1.0, current_price)  # 全部卖出
+# 查看最终状态
+print(f"最终资金: {strategy.broker.cash:.2f}")
+print(f"持仓情况: {strategy.broker.positions}")
+
+# 查看交易记录
+trades_df = strategy.broker.trades
+print("交易记录:")
+print(trades_df.tail())
 ```
 
-#### 布林带策略
+## 可视化分析
+
+### 收益曲线
 
 ```python
-class BollingerBandStrategy(qka.Strategy):
-    def __init__(self, window=20, num_std=2):
-        super().__init__()
-        self.window = window
-        self.num_std = num_std
-    
-    def on_bar(self, data, broker, current_date):
-        for symbol, df in data.items():
-            if len(df) < self.window:
-                continue
-                
-            # 计算布林带
-            close_prices = df['close']
-            rolling_mean = close_prices.rolling(self.window).mean().iloc[-1]
-            rolling_std = close_prices.rolling(self.window).std().iloc[-1]
-            
-            upper_band = rolling_mean + (rolling_std * self.num_std)
-            lower_band = rolling_mean - (rolling_std * self.num_std)
-            current_price = close_prices.iloc[-1]
-            
-            # 价格突破下轨买入，突破上轨卖出
-            if current_price < lower_band and broker.get_position(symbol) == 0:
-                broker.buy(symbol, 0.4, current_price)
-            elif current_price > upper_band and broker.get_position(symbol) > 0:
-                broker.sell(symbol, 1.0, current_price)
+# 绘制收益曲线
+fig = backtest.plot("我的策略回测结果")
+
+# 自定义图表标题
+fig = backtest.plot("自定义标题")
 ```
 
-## 交易接口
-
-### Broker 类
-
-`Broker` 类提供了所有交易相关的功能：
+### 详细分析
 
 ```python
-# 获取当前持仓
-position = broker.get_position('000001')  # 返回持仓股数
+# 计算关键指标
+trades_df = strategy.broker.trades
 
-# 获取可用现金
-cash = broker.get_cash()
+# 总收益率
+initial_cash = 100000
+final_total = trades_df['total'].iloc[-1]
+total_return = (final_total - initial_cash) / initial_cash * 100
 
-# 获取所有持仓
-positions = broker.get_positions()  # 返回 {股票代码: 持仓数量}
+# 最大回撤
+peak = trades_df['total'].expanding().max()
+drawdown = (trades_df['total'] - peak) / peak * 100
+max_drawdown = drawdown.min()
 
-# 计算总资产
-prices = {'000001': 10.5, '000002': 8.3}
-total_value = broker.get_total_value(prices)
+print(f"总收益率: {total_return:.2f}%")
+print(f"最大回撤: {max_drawdown:.2f}%")
+print(f"夏普比率: {calculate_sharpe(trades_df):.2f}")
 ```
 
-### 买入操作
+## 策略开发指南
+
+### 策略结构
+
+所有策略必须继承 `qka.Strategy` 并实现 `on_bar` 方法：
 
 ```python
-# 按比例买入（推荐）
-broker.buy('000001', 0.3, price)  # 用30%的资金买入
-
-# 按股数买入
-broker.buy('000001', 1000, price)  # 买入1000股（自动调整为整手）
-
-# 买入条件检查
-if broker.get_cash() > 10000:  # 现金充足
-    if broker.get_position('000001') == 0:  # 没有持仓
-        broker.buy('000001', 0.2, current_price)
-```
-
-### 卖出操作
-
-```python
-# 按比例卖出
-broker.sell('000001', 0.5, price)  # 卖出50%的持仓
-broker.sell('000001', 1.0, price)  # 全部卖出
-
-# 按股数卖出
-broker.sell('000001', 500, price)  # 卖出500股
-
-# 卖出条件检查
-if broker.get_position('000001') > 0:  # 有持仓
-    broker.sell('000001', 1.0, current_price)  # 全部卖出
-```
-
-## 回测配置
-
-### 基本配置
-
-```python
-import qka
-
-# 自定义 Broker 配置
-custom_broker = qka.Broker(
-    initial_cash=500000,     # 初始资金50万
-    commission_rate=0.0003   # 手续费率0.03%
-)
-
-# 使用自定义配置运行回测
-result = qka.backtest(
-    data=data_obj,
-    strategy=MyStrategy(),
-    broker=custom_broker,
-    start_time='2023-01-01',
-    end_time='2023-12-31'
-)
-```
-
-### 数据获取
-
-```python
-import qka
-
-# 使用默认数据源（akshare）
-data_obj = qka.data(stocks=['000001'])
-
-# 多只股票
-data_obj = qka.data(stocks=['000001', '000002', '600000'])
-
-# 设置全局数据源
-qka.set_source('qmt')
-data_obj = qka.data(stocks=['000001.SZ', '600000.SH'])  # QMT格式股票代码
-
-# 临时指定数据源
-data_obj = qka.data(stocks=['000001'], source='akshare')
-```
-
-## 回测结果分析
-
-### 基本指标
-
-回测结果包含以下关键指标：
-
-```python
-# 基本收益指标
-print(f"初始资金: {result['initial_capital']:,.0f}")
-print(f"最终资产: {result['final_value']:,.0f}")
-print(f"总收益率: {result['total_return']:.2%}")
-print(f"年化收益率: {result['annual_return']:.2%}")
-
-# 风险指标
-print(f"收益波动率: {result['volatility']:.2%}")
-print(f"夏普比率: {result['sharpe_ratio']:.2f}")
-print(f"最大回撤: {result['max_drawdown']:.2%}")
-
-# 交易指标
-print(f"总交易次数: {result['total_trades']}")
-print(f"总手续费: {result['total_commission']:,.2f}")
-print(f"胜率: {result['win_rate']:.2%}")
-print(f"交易天数: {result['trading_days']}")
-```
-
-### 详细数据
-
-```python
-# 每日净值数据
-daily_values = result['daily_values']
-for record in daily_values[:5]:  # 显示前5天
-    print(f"日期: {record['date']}, 总资产: {record['total_value']:,.2f}")
-
-# 交易记录
-trades = result['trades']
-for trade in trades[:5]:  # 显示前5笔交易
-    print(f"{trade['date']}: {trade['action']} {trade['symbol']} "
-          f"{trade['shares']}股 @{trade['price']}")
-
-# 最终持仓
-positions = result['positions']
-print(f"最终持仓: {positions}")
-```
-
-## 结果可视化
-
-```python
-import qka
-
-# 绘制回测结果图表
-qka.plot(result)
-```
-
-## 策略开发技巧
-
-### 数据处理
-
-```python
-def on_bar(self, data, broker, current_date):
-    for symbol, df in data.items():
-        # 检查数据长度
-        if len(df) < 20:
-            continue
-            
-        # 获取最新价格
-        current_price = df['close'].iloc[-1]
-        
-        # 计算技术指标
-        sma_20 = df['close'].rolling(20).mean().iloc[-1]
-        rsi = self.calculate_rsi(df['close'], 14)
-        
-        # 处理缺失值
-        if pd.isna(sma_20) or pd.isna(rsi):
-            continue
-            
-        # 策略逻辑
-        if rsi < 30 and current_price > sma_20:
-            broker.buy(symbol, 0.2, current_price)
-```
-
-### 风险控制
-
-```python
-def on_bar(self, data, broker, current_date):
-    for symbol, df in data.items():
-        current_price = df['close'].iloc[-1]
-        position = broker.get_position(symbol)
-        
-        # 止损逻辑
-        if position > 0:
-            avg_cost = broker.avg_costs.get(symbol, current_price)
-            if current_price < avg_cost * 0.95:  # 5%止损
-                broker.sell(symbol, 1.0, current_price)
-                continue
-        
-        # 仓位控制
-        total_value = broker.get_total_value({symbol: current_price})
-        position_value = position * current_price
-        position_ratio = position_value / total_value
-        
-        if position_ratio > 0.3:  # 单只股票最大30%仓位
-            continue
-            
-        # 买入逻辑
-        # ...
-```
-
-### 多股票策略
-
-```python
-class MultiStockStrategy(qka.Strategy):
-    def on_bar(self, data, broker, current_date):
-        # 收集所有股票的信号
-        signals = {}
-        for symbol, df in data.items():
-            if len(df) >= 20:
-                signal = self.calculate_signal(df)
-                signals[symbol] = signal
-        
-        # 按信号强度排序
-        sorted_signals = sorted(signals.items(), 
-                              key=lambda x: x[1], reverse=True)
-        
-        # 只选择前3只股票
-        selected_stocks = sorted_signals[:3]
-        
-        # 平均分配资金
-        for symbol, signal in selected_stocks:
-            if signal > 0.5 and broker.get_position(symbol) == 0:
-                broker.buy(symbol, 0.3, data[symbol]['close'].iloc[-1])
-```
-
-## 最佳实践
-
-### 1. 数据质量检查
-
-```python
-def on_bar(self, data, broker, current_date):
-    for symbol, df in data.items():
-        # 检查价格合理性
-        current_price = df['close'].iloc[-1]
-        if current_price <= 0 or pd.isna(current_price):
-            continue
-            
-        # 检查成交量
-        volume = df['volume'].iloc[-1]
-        if volume <= 0:
-            continue
-            
-        # 策略逻辑
-        # ...
-```
-
-### 2. 参数化策略
-
-```python
-class ParameterizedStrategy(qka.Strategy):
-    def __init__(self, ma_period=20, position_size=0.3, stop_loss=0.05):
-        super().__init__()
-        self.ma_period = ma_period
-        self.position_size = position_size
-        self.stop_loss = stop_loss
-    
-    def on_bar(self, data, broker, current_date):
-        for symbol, df in data.items():
-            if len(df) < self.ma_period:
-                continue
-                
-            current_price = df['close'].iloc[-1]
-            ma = df['close'].rolling(self.ma_period).mean().iloc[-1]
-            
-            # 使用参数化的逻辑
-            if current_price > ma:
-                broker.buy(symbol, self.position_size, current_price)
-```
-
-### 3. 策略状态管理
-
-```python
-class StatefulStrategy(qka.Strategy):
+class MyStrategy(qka.Strategy):
     def __init__(self):
         super().__init__()
-        self.last_signal = {}
-        self.entry_prices = {}
+        # 初始化策略参数
+        self.param1 = value1
+        self.param2 = value2
     
-    def on_bar(self, data, broker, current_date):
-        for symbol, df in data.items():
-            # 保存策略状态
-            current_signal = self.calculate_signal(df)
-            last_signal = self.last_signal.get(symbol, 0)
+    def on_bar(self, date, get):
+        """
+        date: 当前时间戳
+        get: 获取因子数据的函数
+        """
+        # 获取数据
+        close_prices = get('close')
+        volumes = get('volume')
+        
+        # 策略逻辑
+        for symbol in close_prices.index:
+            current_price = close_prices[symbol]
+            current_volume = volumes[symbol]
             
-            # 信号变化时才交易
-            if current_signal != last_signal:
-                if current_signal > 0:
-                    price = df['close'].iloc[-1]
-                    broker.buy(symbol, 0.3, price)
-                    self.entry_prices[symbol] = price
-                else:
-                    broker.sell(symbol, 1.0, df['close'].iloc[-1])
-                    self.entry_prices.pop(symbol, None)
+            # 交易决策
+            if self.should_buy(symbol, current_price, current_volume):
+                self.buy(symbol, current_price)
+            elif self.should_sell(symbol, current_price, current_volume):
+                self.sell(symbol, current_price)
+    
+    def should_buy(self, symbol, price, volume):
+        # 买入条件
+        return True  # 替换为实际条件
+    
+    def should_sell(self, symbol, price, volume):
+        # 卖出条件
+        return True  # 替换为实际条件
+    
+    def buy(self, symbol, price):
+        # 买入逻辑
+        size = self.calculate_position_size(price)
+        self.broker.buy(symbol, price, size)
+    
+    def sell(self, symbol, price):
+        # 卖出逻辑
+        position = self.broker.positions.get(symbol)
+        if position:
+            self.broker.sell(symbol, price, position['size'])
+```
+
+### 数据访问
+
+在 `on_bar` 方法中，使用 `get` 函数访问数据：
+
+```python
+def on_bar(self, date, get):
+    # 获取收盘价（所有股票）
+    close_prices = get('close')
+    
+    # 获取成交量
+    volumes = get('volume')
+    
+    # 获取开盘价
+    open_prices = get('open')
+    
+    # 获取自定义因子（如果定义了）
+    ma5_values = get('ma5')  # 假设在数据中定义了ma5因子
+```
+
+## 风险控制
+
+### 仓位管理
+
+```python
+class RiskManagedStrategy(qka.Strategy):
+    def __init__(self):
+        super().__init__()
+        self.max_position_ratio = 0.1  # 单只股票最大仓位比例
+        self.max_total_position = 0.8  # 总仓位上限
+    
+    def calculate_position_size(self, symbol, price):
+        # 计算合理的买入数量
+        available_cash = self.broker.cash
+        total_assets = self.broker.get('total')
+        
+        # 单只股票仓位限制
+        max_position_value = total_assets * self.max_position_ratio
+        max_shares = int(max_position_value / price)
+        
+        # 总仓位限制
+        current_position_value = sum(
+            pos['size'] * pos['avg_price'] 
+            for pos in self.broker.positions.values()
+        )
+        available_for_new = total_assets * self.max_total_position - current_position_value
+        max_shares_by_total = int(available_for_new / price)
+        
+        return min(max_shares, max_shares_by_total, int(available_cash / price))
+```
+
+### 止损策略
+
+```python
+class StopLossStrategy(qka.Strategy):
+    def __init__(self):
+        super().__init__()
+        self.stop_loss_rate = 0.05  # 5%止损
+        self.entry_prices = {}      # 记录买入价格
+    
+    def on_bar(self, date, get):
+        close_prices = get('close')
+        
+        # 检查止损
+        for symbol, position in self.broker.positions.items():
+            if symbol in self.entry_prices:
+                entry_price = self.entry_prices[symbol]
+                current_price = close_prices[symbol]
+                loss_rate = (current_price - entry_price) / entry_price
+                
+                if loss_rate <= -self.stop_loss_rate:
+                    # 触发止损
+                    self.broker.sell(symbol, current_price, position['size'])
+                    del self.entry_prices[symbol]
+        
+        # 正常的买入逻辑
+        for symbol in close_prices.index:
+            if self.should_buy(symbol, close_prices[symbol]):
+                size = self.calculate_position_size(symbol, close_prices[symbol])
+                if self.broker.buy(symbol, close_prices[symbol], size):
+                    self.entry_prices[symbol] = close_prices[symbol]
+```
+
+## 性能优化
+
+### 避免重复计算
+
+```python
+class OptimizedStrategy(qka.Strategy):
+    def __init__(self):
+        super().__init__()
+        self.cache = {}  # 缓存计算结果
+    
+    def on_bar(self, date, get):
+        # 缓存数据访问
+        close_prices = get('close')
+        
+        for symbol in close_prices.index:
+            # 避免重复获取相同数据
+            if symbol not in self.cache:
+                self.cache[symbol] = self.calculate_indicators(symbol, get)
             
-            self.last_signal[symbol] = current_signal
+            indicators = self.cache[symbol]
+            
+            # 使用缓存的数据进行决策
+            if self.should_trade(symbol, indicators):
+                # 交易逻辑...
+                pass
+```
+
+### 批量处理
+
+```python
+class BatchStrategy(qka.Strategy):
+    def on_bar(self, date, get):
+        # 一次性获取所有需要的数据
+        close_prices = get('close')
+        volumes = get('volume')
+        ma5_values = get('ma5')
+        ma20_values = get('ma20')
+        
+        # 批量计算交易信号
+        buy_signals = self.calculate_buy_signals(close_prices, volumes, ma5_values, ma20_values)
+        sell_signals = self.calculate_sell_signals(close_prices, volumes, ma5_values, ma20_values)
+        
+        # 批量执行交易
+        for symbol, should_buy in buy_signals.items():
+            if should_buy:
+                self.buy(symbol, close_prices[symbol])
+        
+        for symbol, should_sell in sell_signals.items():
+            if should_sell:
+                self.sell(symbol, close_prices[symbol])
+```
+
+## 高级功能
+
+### 多时间框架
+
+```python
+class MultiTimeframeStrategy(qka.Strategy):
+    def __init__(self):
+        super().__init__()
+        # 加载不同时间框架的数据
+        self.daily_data = qka.Data(symbols=['000001.SZ'], period='1d')
+        self.hourly_data = qka.Data(symbols=['000001.SZ'], period='1h')
+    
+    def on_bar(self, date, get):
+        # 日线级别判断趋势
+        daily_trend = self.analyze_daily_trend()
+        
+        # 小时线级别寻找入场点
+        if daily_trend == 'up':
+            hourly_signal = self.analyze_hourly_signal()
+            if hourly_signal == 'buy':
+                # 执行买入
+                pass
+```
+
+### 参数优化
+
+```python
+# 简单的参数网格搜索
+def optimize_strategy():
+    best_params = None
+    best_return = -float('inf')
+    
+    for ma_short in [5, 10, 20]:
+        for ma_long in [20, 30, 50]:
+            # 使用不同参数运行回测
+            data = qka.Data(symbols=['000001.SZ'])
+            strategy = MovingAverageStrategy(ma_short, ma_long)
+            backtest = qka.Backtest(data, strategy)
+            backtest.run()
+            
+            # 计算收益率
+            final_total = strategy.broker.get('total')
+            total_return = (final_total - 100000) / 100000
+            
+            if total_return > best_return:
+                best_return = total_return
+                best_params = (ma_short, ma_long)
+    
+    return best_params, best_return
 ```
 
 ## 常见问题
 
-### Q: 如何处理停牌股票？
+### Q: 回测速度很慢怎么办？
 
-```python
-def on_bar(self, data, broker, current_date):
-    for symbol, df in data.items():
-        # 检查是否停牌
-        if current_date not in df.index:
-            continue  # 跳过停牌股票
-            
-        current_price = df.loc[current_date, 'close']
-        if current_price == 0:
-            continue  # 价格为0可能是停牌
-```
+A: 可以尝试：
+- 减少股票数量
+- 使用更短的时间段
+- 优化策略代码，避免重复计算
+- 使用更简单的因子
 
-### Q: 如何避免未来函数？
+### Q: 如何验证策略的稳定性？
 
-```python
-def on_bar(self, data, broker, current_date):
-    for symbol, df in data.items():
-        # 只使用当前日期之前的数据
-        historical_data = df.loc[:current_date]
-        
-        # 计算指标时确保不使用未来数据
-        sma = historical_data['close'].rolling(20).mean().iloc[-1]
-```
+A: 建议：
+- 使用不同时间段的数据进行回测
+- 进行参数敏感性分析
+- 使用交叉验证
+- 考虑交易成本和滑点
 
-### Q: 如何处理数据缺失？
+### Q: 回测结果和实盘差异很大？
 
-```python
-def on_bar(self, data, broker, current_date):
-    for symbol, df in data.items():
-        # 检查关键数据是否缺失
-        if df[['open', 'high', 'low', 'close', 'volume']].iloc[-1].isna().any():
-            continue
-        
-        # 使用前向填充处理缺失值
-        df_filled = df.fillna(method='ffill')
-```
+A: 可能原因：
+- 未来函数（使用了未来数据）
+- 未考虑交易成本和滑点
+- 数据质量问题
+- 市场环境变化
+
+## 下一步
+
+- 学习 [实盘交易](trading.md) 了解如何将策略用于实盘
+- 查看 [API 文档](../api/core/backtest.md) 了解完整的回测接口
+- 参考 [示例教程](../examples/basic/simple-backtest.md) 获取更多代码示例

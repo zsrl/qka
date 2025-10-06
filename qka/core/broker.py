@@ -1,7 +1,26 @@
+"""
+QKA经纪商模块
+
+提供虚拟交易经纪商功能，管理资金、持仓和交易记录，支持回测环境下的交易操作。
+"""
+
 import pandas as pd
 from typing import Dict, List, Any, Optional
 
 class Broker:
+    """
+    虚拟交易经纪商类
+    
+    管理资金、持仓和交易记录，提供买入卖出操作接口。
+    
+    Attributes:
+        cash (float): 可用现金
+        positions (Dict): 持仓记录，格式: {symbol: {'size': 数量, 'avg_price': 平均成本}}
+        trade_history (List): 交易历史记录
+        timestamp: 当前时间戳
+        trades (pd.DataFrame): 交易记录DataFrame
+    """
+    
     def __init__(self, initial_cash=100000.0):
         """
         初始化Broker类
@@ -26,7 +45,7 @@ class Broker:
         
         Args:
             date: 当前时间戳
-            get: 获取因子数据的函数
+            get: 获取因子数据的函数，格式为 get(factor_name) -> pd.Series
         """
         self.timestamp = date
         
@@ -69,7 +88,7 @@ class Broker:
         # 添加到trades
         self.trades.loc[self.timestamp] = state_data
     
-    def buy(self, symbol, price, size):
+    def buy(self, symbol: str, price: float, size: int) -> bool:
         """
         买入操作
         
@@ -126,7 +145,7 @@ class Broker:
         print(f"买入成功: {symbol} {size}股 @ {price:.2f}，花费 {required_cash:.2f}")
         return True
     
-    def sell(self, symbol, price, size):
+    def sell(self, symbol: str, price: float, size: int) -> bool:
         """
         卖出操作
         
@@ -174,7 +193,7 @@ class Broker:
         print(f"卖出成功: {symbol} {size}股 @ {price:.2f}，获得 {sale_proceeds:.2f}")
         return True
     
-    def get(self, factor, timestamp=None):
+    def get(self, factor: str, timestamp=None) -> Any:
         """
         从trades DataFrame中获取数据
         
@@ -183,7 +202,7 @@ class Broker:
             timestamp: 时间戳，如果为None则使用当前时间戳
             
         Returns:
-            对应列的数据
+            Any: 对应列的数据，如果不存在则返回None
         """
         if timestamp is None:
             timestamp = self.timestamp

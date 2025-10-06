@@ -1,335 +1,176 @@
 # 第一个策略
 
-本教程将指导您创建和运行您的第一个量化交易策略。
+本指南将带你创建第一个简单的量化策略，包括数据获取、策略开发和回测分析。
 
-## 策略概述
+## 策略目标
 
-我们将创建一个简单的均线策略：
-- 当短期均线上穿长期均线时买入（金叉）
-- 当短期均线下穿长期均线时卖出（死叉）
+创建一个简单的移动平均策略：
+- 当短期均线上穿长期均线时买入
+- 当短期均线下穿长期均线时卖出
 
-## 创建策略文件
+## 步骤1：数据获取
 
-创建一个新文件 `my_first_strategy.py`：
+首先，我们需要获取股票数据：
 
 ```python
-"""
-我的第一个量化策略
-简单的双均线策略
-"""
-
 import qka
-from qka.core.backtest import Strategy
-from qka.core.data import get_stock_data
 
+# 创建数据对象
+data = qka.Data(
+    symbols=['000001.SZ', '600000.SH'],  # 股票代码列表
+    period='1d',                         # 日线数据
+    adjust='qfq'                         # 前复权
+)
 
-class MovingAverageStrategy(Strategy):
-    """双均线策略"""
-    
-    def __init__(self, short_window=20, long_window=50):
-        super().__init__()
-        self.short_window = short_window
-        self.long_window = long_window
-        self.name = f"双均线策略({short_window}/{long_window})"
-        
-        # 存储均线数据
-        self.short_ma = {}
-        self.long_ma = {}
-        self.last_signal = {}
-    
-    def on_init(self):
-        """策略初始化"""
-        self.log("策略初始化开始")
-        
-        # 订阅股票数据
-        self.subscribe('000001.SZ')  # 平安银行
-        
-        self.log("策略初始化完成")
-    
-    def calculate_moving_average(self, prices, window):
-        """计算移动平均线"""
-        if len(prices) < window:
-            return None
-        return sum(prices[-window:]) / window
-    
-    def on_data(self, data):
-        """处理数据更新"""
-        for symbol in data.index:
-            # 获取历史价格
-            prices = self.get_price_history(symbol, self.long_window + 10)
-            
-            if len(prices) < self.long_window:
-                continue
-            
-            # 计算短期和长期均线
-            short_ma = self.calculate_moving_average(prices, self.short_window)
-            long_ma = self.calculate_moving_average(prices, self.long_window)
-            
-            if short_ma is None or long_ma is None:
-                continue
-            
-            # 获取之前的均线值
-            prev_short = self.short_ma.get(symbol, 0)
-            prev_long = self.long_ma.get(symbol, 0)
-            
-            # 当前持仓
-            position = self.get_position(symbol)
-            current_price = data.loc[symbol, 'close']
-            
-            # 交易信号判断
-            if short_ma > long_ma and prev_short <= prev_long:
-                # 金叉 - 买入信号
-                if not position:
-                    volume = self.calculate_position_size(symbol, current_price)
-                    if volume > 0:
-                        self.buy(symbol, volume)
-                        self.log(f"{symbol} 金叉买入，价格: {current_price:.2f}, 数量: {volume}")
-                        self.last_signal[symbol] = 'BUY'
-            
-            elif short_ma < long_ma and prev_short >= prev_long:
-                # 死叉 - 卖出信号
-                if position and position.volume > 0:
-                    self.sell(symbol, position.volume)
-                    self.log(f"{symbol} 死叉卖出，价格: {current_price:.2f}, 数量: {position.volume}")
-                    self.last_signal[symbol] = 'SELL'
-            
-            # 保存当前均线值
-            self.short_ma[symbol] = short_ma
-            self.long_ma[symbol] = long_ma
-    
-    def calculate_position_size(self, symbol, price):
-        """计算买入数量"""
-        # 使用可用资金的10%买入
-        available_cash = self.get_available_cash()
-        target_value = available_cash * 0.1
-        volume = int(target_value / price / 100) * 100  # 整手买入
-        return volume
-    
-    def on_order(self, order):
-        """订单状态变化回调"""
-        self.log(f"订单更新: {order.symbol} {order.side} {order.volume}股 @ {order.price:.2f} - {order.status}")
-    
-    def on_trade(self, trade):
-        """成交回调"""
-        self.log(f"成交确认: {trade.symbol} {trade.side} {trade.volume}股 @ {trade.price:.2f}")
-
-
-if __name__ == "__main__":
-    # 运行策略
-    print("开始运行双均线策略...")
-    
-    # 1. 加载配置
-    qka.config.backtest.initial_cash = 1000000  # 100万初始资金
-    qka.config.backtest.commission_rate = 0.0003  # 万三手续费
-    
-    # 2. 创建回测引擎
-    from qka.core.backtest import BacktestEngine
-    
-    engine = BacktestEngine(
-        initial_cash=qka.config.backtest.initial_cash,
-        start_date='2024-01-01',
-        end_date='2024-06-30',
-        commission_rate=qka.config.backtest.commission_rate
-    )
-    
-    # 3. 获取数据
-    print("正在获取数据...")
-    data = get_stock_data('000001.SZ', start='2024-01-01', end='2024-06-30')
-    engine.add_data(data)
-    
-    # 4. 创建并运行策略
-    strategy = MovingAverageStrategy(short_window=20, long_window=50)
-    
-    print("开始回测...")
-    result = engine.run(strategy)
-    
-    # 5. 显示结果
-    print("\n" + "="*50)
-    print("回测结果")
-    print("="*50)
-    print(f"策略名称: {strategy.name}")
-    print(f"回测期间: 2024-01-01 至 2024-06-30")
-    print(f"初始资金: ¥{qka.config.backtest.initial_cash:,.2f}")
-    print(f"最终资金: ¥{result.final_value:,.2f}")
-    print(f"总收益率: {result.total_return:.2%}")
-    print(f"年化收益率: {result.annual_return:.2%}")
-    print(f"最大回撤: {result.max_drawdown:.2%}")
-    print(f"夏普比率: {result.sharpe_ratio:.2f}")
-    print(f"交易次数: {result.trade_count}")
-    print(f"胜率: {result.win_rate:.2%}")
-    
-    # 6. 绘制收益曲线（如果有matplotlib）
-    try:
-        from qka.core.plot import plot_returns
-        plot_returns(result.returns, title="双均线策略收益曲线")
-        print("\n收益曲线图已显示")
-    except ImportError:
-        print("\n提示: 安装 matplotlib 可以查看收益曲线图")
-        print("命令: pip install matplotlib")
-    
-    print("\n策略运行完成！")
+# 获取数据
+df = data.get()
+print(f"数据形状: {df.shape}")
+print(df.head())
 ```
 
-## 运行策略
+## 步骤2：创建策略
 
-### 命令行运行
-
-```bash
-# 确保已安装 QKA
-pip install qka
-
-# 运行策略
-python my_first_strategy.py
-```
-
-### 预期输出
-
-```
-开始运行双均线策略...
-正在获取数据...
-开始回测...
-
-==================================================
-回测结果
-==================================================
-策略名称: 双均线策略(20/50)
-回测期间: 2024-01-01 至 2024-06-30
-初始资金: ¥1,000,000.00
-最终资金: ¥1,050,000.00
-总收益率: 5.00%
-年化收益率: 10.25%
-最大回撤: -3.20%
-夏普比率: 1.15
-交易次数: 8
-胜率: 62.50%
-
-收益曲线图已显示
-策略运行完成！
-```
-
-## 理解代码
-
-### 策略类结构
+继承 `qka.Strategy` 类并实现 `on_bar` 方法：
 
 ```python
-class MovingAverageStrategy(Strategy):
+class MovingAverageStrategy(qka.Strategy):
     def __init__(self):
-        # 初始化参数
-        
-    def on_init(self):
-        # 策略启动时执行一次
-        
-    def on_data(self, data):
-        # 每次数据更新时执行
-        
-    def on_order(self, order):
-        # 订单状态变化时执行
-        
-    def on_trade(self, trade):
-        # 成交时执行
-```
-
-### 关键方法说明
-
-| 方法 | 作用 | 调用时机 |
-|------|------|----------|
-| `on_init()` | 策略初始化 | 策略开始时 |
-| `on_data()` | 处理数据 | 每个交易日 |
-| `buy()` | 买入股票 | 产生买入信号时 |
-| `sell()` | 卖出股票 | 产生卖出信号时 |
-| `get_position()` | 获取持仓 | 需要查询持仓时 |
-| `log()` | 记录日志 | 任何时候 |
-
-## 策略优化
-
-### 参数调优
-
-```python
-# 测试不同参数组合
-strategies = []
-for short in [10, 15, 20]:
-    for long in [30, 40, 50]:
-        if short < long:
-            strategy = MovingAverageStrategy(short, long)
-            result = engine.run(strategy)
-            strategies.append((short, long, result.sharpe_ratio))
-
-# 找出最优参数
-best_params = max(strategies, key=lambda x: x[2])
-print(f"最优参数: 短线={best_params[0]}, 长线={best_params[1]}")
-```
-
-### 添加止损止盈
-
-```python
-def on_data(self, data):
-    # ...原有逻辑...
+        super().__init__()
+        self.ma_short = 5    # 短期均线周期
+        self.ma_long = 20    # 长期均线周期
+        self.positions = {}  # 持仓记录
     
-    # 检查止损止盈
-    for symbol in self.positions:
-        position = self.get_position(symbol)
-        if position and position.volume > 0:
-            current_price = data.loc[symbol, 'close']
-            cost_price = position.avg_price
+    def on_bar(self, date, get):
+        """
+        每个bar的处理逻辑
+        
+        Args:
+            date: 当前时间戳
+            get: 获取因子数据的函数
+        """
+        # 获取当前价格数据
+        close_prices = get('close')
+        
+        # 遍历所有股票
+        for symbol in close_prices.index:
+            # 获取该股票的历史数据
+            symbol_close = get('close')[symbol]
             
-            # 计算收益率
-            return_rate = (current_price - cost_price) / cost_price
-            
-            # 止损（-5%）
-            if return_rate <= -0.05:
-                self.sell(symbol, position.volume)
-                self.log(f"{symbol} 触发止损")
-            
-            # 止盈（+10%）
-            elif return_rate >= 0.10:
-                self.sell(symbol, position.volume)
-                self.log(f"{symbol} 触发止盈")
+            # 计算移动平均
+            if len(symbol_close) >= self.ma_long:
+                ma_short = symbol_close[-self.ma_short:].mean()
+                ma_long = symbol_close[-self.ma_long:].mean()
+                
+                current_price = symbol_close.iloc[-1]
+                
+                # 交易逻辑
+                if ma_short > ma_long and symbol not in self.positions:
+                    # 短期均线上穿长期均线，买入
+                    size = int(self.broker.cash * 0.1 / current_price)  # 使用10%资金
+                    if size > 0:
+                        self.broker.buy(symbol, current_price, size)
+                        self.positions[symbol] = True
+                        
+                elif ma_short < ma_long and symbol in self.positions:
+                    # 短期均线下穿长期均线，卖出
+                    position = self.broker.positions.get(symbol)
+                    if position:
+                        self.broker.sell(symbol, current_price, position['size'])
+                        del self.positions[symbol]
 ```
+
+## 步骤3：运行回测
+
+创建策略实例并运行回测：
+
+```python
+# 创建策略实例
+strategy = MovingAverageStrategy()
+
+# 创建回测引擎
+backtest = qka.Backtest(data, strategy)
+
+# 运行回测
+print("开始回测...")
+backtest.run()
+print("回测完成！")
+
+# 查看回测结果
+print(f"最终资金: {strategy.broker.cash:.2f}")
+print(f"持仓情况: {strategy.broker.positions}")
+```
+
+## 步骤4：可视化结果
+
+使用内置的可视化功能查看回测结果：
+
+```python
+# 绘制收益曲线
+fig = backtest.plot("移动平均策略回测结果")
+
+# 查看详细交易记录
+trades_df = strategy.broker.trades
+print("交易记录:")
+print(trades_df.tail())
+
+# 计算收益率
+initial_cash = 100000
+final_total = trades_df['total'].iloc[-1]
+total_return = (final_total - initial_cash) / initial_cash * 100
+print(f"总收益率: {total_return:.2f}%")
+```
+
+## 完整代码示例
+
+```python
+import qka
+
+class MovingAverageStrategy(qka.Strategy):
+    def __init__(self):
+        super().__init__()
+        self.ma_short = 5
+        self.ma_long = 20
+        self.positions = {}
+    
+    def on_bar(self, date, get):
+        close_prices = get('close')
+        
+        for symbol in close_prices.index:
+            symbol_close = get('close')[symbol]
+            
+            if len(symbol_close) >= self.ma_long:
+                ma_short = symbol_close[-self.ma_short:].mean()
+                ma_long = symbol_close[-self.ma_long:].mean()
+                current_price = symbol_close.iloc[-1]
+                
+                if ma_short > ma_long and symbol not in self.positions:
+                    size = int(self.broker.cash * 0.1 / current_price)
+                    if size > 0:
+                        self.broker.buy(symbol, current_price, size)
+                        self.positions[symbol] = True
+                elif ma_short < ma_long and symbol in self.positions:
+                    position = self.broker.positions.get(symbol)
+                    if position:
+                        self.broker.sell(symbol, current_price, position['size'])
+                        del self.positions[symbol]
+
+# 执行策略
+data = qka.Data(symbols=['000001.SZ', '600000.SH'], period='1d')
+strategy = MovingAverageStrategy()
+backtest = qka.Backtest(data, strategy)
+backtest.run()
+backtest.plot()
+```
+
+## 策略优化建议
+
+1. **参数调优**: 尝试不同的均线周期组合
+2. **风险控制**: 添加止损和仓位控制
+3. **多因子**: 结合其他技术指标
+4. **数据验证**: 使用更长时间段的数据进行验证
 
 ## 下一步
 
-现在您已经创建了第一个策略，可以：
-
-1. **学习更多策略**：查看 [示例教程](../examples/simple-strategy.md)
-2. **优化策略**：了解 [参数优化](../user-guide/backtest.md#参数优化)
-3. **风险管理**：学习 [风险控制](../examples/risk-management.md)
-4. **实盘交易**：准备 [实盘部署](../user-guide/trading.md)
-
-## 常见问题
-
-### Q: 如何添加更多股票？
-
-```python
-def on_init(self):
-    # 添加多只股票
-    stocks = ['000001.SZ', '000002.SZ', '600000.SH']
-    for stock in stocks:
-        self.subscribe(stock)
-```
-
-### Q: 如何修改买入金额？
-
-```python
-def calculate_position_size(self, symbol, price):
-    # 固定金额买入（比如每次10000元）
-    target_value = 10000
-    volume = int(target_value / price / 100) * 100
-    return volume
-```
-
-### Q: 如何保存回测结果？
-
-```python
-# 保存结果到文件
-import json
-results = {
-    'total_return': result.total_return,
-    'sharpe_ratio': result.sharpe_ratio,
-    'max_drawdown': result.max_drawdown
-}
-
-with open('backtest_results.json', 'w') as f:
-    json.dump(results, f, indent=2)
-```
-
-恭喜！您已经创建并运行了第一个量化交易策略。
+- 学习 [基础概念](concepts.md) 深入了解 QKA 架构
+- 查看 [用户指南](../user-guide/data.md) 学习更多高级功能
+- 参考 [API 文档](../api/core/data.md) 了解完整接口说明
