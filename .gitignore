@@ -170,3 +170,4 @@ cython_debug/
 *.ipynb
 uv.lock
 output
+datadir

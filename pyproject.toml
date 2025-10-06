@@ -27,6 +27,10 @@ dependencies = [
     "uvicorn>=0.34.3",
     "xtquant>=241014.1.2",
     "ipykernel>=6.29.5",
+    "pyarrow>=21.0.0",
+    "tqdm>=4.67.1",
+    "dask[complete]>=2025.7.0",
+    "ta>=0.11.0",
 ]
 
 [project.optional-dependencies]

@@ -1,283 +1,243 @@
 # 数据获取
 
-QKA 提供了统一的数据获取接口，目前支持QMT和Akshare两种数据源。
-
-## 支持的数据源
-
-- **QMT** - 迅投QMT数据源，支持历史数据和实时数据
-- **Akshare** - 开源财经数据接口，支持历史数据（默认数据源）
-
-## 快速开始
-
-### 设置默认数据源
-
-```python
-import qka
-
-# 查看可用的数据源
-print(qka.get_available_sources())  # ['qmt', 'akshare']
-
-# 设置默认数据源（推荐在程序开始时设置）
-qka.set_source('akshare')  # 或 'qmt'
-
-# 查看当前默认数据源
-print(qka.get_source())  # akshare
-```
-
-### 简化的数据获取
-
-设置默认数据源后，创建数据对象更加简洁：
-
-```python
-import qka
-
-# 设置默认数据源
-qka.set_source('akshare')
-
-# 创建数据对象（自动使用默认数据源）
-data_obj = qka.data(stocks=['000001', '600000'])
-
-# 获取历史数据
-hist_data = data_obj.get(
-    start_time='2023-01-01',
-    end_time='2023-12-31'
-)
-```
+QKA 提供统一的数据获取接口，支持多种数据源和灵活的数据处理。
 
 ## 基本用法
 
-### 使用QMT数据源
+### 创建数据对象
 
 ```python
 import qka
 
-# 方式1：设置为默认数据源
-qka.set_source('qmt')
-data_obj = qka.data(stocks=['000001.SZ', '600000.SH'])
+# 最简单的数据获取
+data = qka.Data(symbols=['000001.SZ', '600000.SH'])
+df = data.get()
+```
 
-# 方式2：临时指定数据源
-data_obj = qka.data(stocks=['000001.SZ', '600000.SH'], source='qmt')
+### 参数说明
 
-# 获取历史数据
-hist_data = data_obj.get(
-    period='1d',
-    start_time='2023-01-01', 
-    end_time='2023-12-31'
+```python
+data = qka.Data(
+    symbols=['000001.SZ', '600000.SH'],  # 股票代码列表
+    period='1d',                         # 数据周期
+    adjust='qfq',                        # 复权方式
+    source='akshare',                    # 数据源
+    pool_size=10,                        # 并发线程数
+    datadir='./mydata'                   # 缓存目录
 )
-
-# 订阅实时数据（需要QMT环境）
-def on_data(code, item):
-    print(f"{code}: 价格={item['lastPrice']}")
-
-data_obj.subscribe(on_data)
 ```
 
-### 使用Akshare数据源
+## 数据周期
+
+支持多种数据周期：
 
 ```python
-import qka
+# 日线数据
+daily_data = qka.Data(symbols=['000001.SZ'], period='1d')
 
-# 方式1：使用默认数据源（akshare为默认）
-data_obj = qka.data(stocks=['000001', '600000'])
+# 分钟线数据（如果数据源支持）
+minute_data = qka.Data(symbols=['000001.SZ'], period='1m')
 
-# 方式2：显式指定数据源
-data_obj = qka.data(stocks=['000001', '600000'], source='akshare')
+# 周线数据
+weekly_data = qka.Data(symbols=['000001.SZ'], period='1w')
+```
 
-# 获取历史数据
-hist_data = data_obj.get(
-    start_time='2023-01-01',
-    end_time='2023-12-31'
+## 复权方式
+
+支持三种复权方式：
+
+```python
+# 前复权（推荐）
+qfq_data = qka.Data(symbols=['000001.SZ'], adjust='qfq')
+
+# 后复权
+hfq_data = qka.Data(symbols=['000001.SZ'], adjust='hfq')
+
+# 不复权
+bfq_data = qka.Data(symbols=['000001.SZ'], adjust='bfq')
+```
+
+## 数据源配置
+
+### Akshare 数据源
+
+Akshare 是默认的数据源，提供丰富的 A 股数据：
+
+```python
+data = qka.Data(
+    symbols=['000001.SZ', '600000.SH'],
+    source='akshare'
 )
-
-# 注意：Akshare不支持实时数据订阅
 ```
 
-### 板块数据获取
+### 自定义数据源
+
+你可以扩展 Data 类来支持其他数据源：
 
 ```python
-import qka
-
-# 使用QMT获取板块股票
-qka.set_source('qmt')
-data_obj = qka.data(sector='沪深A股主板')
-
-# 使用Akshare获取沪深A股（限制前100只）
-qka.set_source('akshare')
-data_obj = qka.data(sector='沪深A股')
-
-# 获取板块内所有股票的历史数据
-hist_data = data_obj.get(start_time='2023-01-01')
-```
-
-## 扩展数据源
-
-QKA支持注册自定义数据源：
-
-```python
-import qka
-from qka.core.data.base import DataSource
-
-# 自定义数据源示例
-class TushareData(DataSource):
-    def get_historical_data(self, period='1d', start_time='', end_time=''):
-        # 实现tushare数据获取逻辑
+class MyData(qka.Data):
+    def _get_from_custom_source(self, symbol: str):
+        # 实现自定义数据获取逻辑
         pass
+```
+
+## 因子计算
+
+### 内置因子
+
+数据获取时自动包含基础因子：
+
+- `open`: 开盘价
+- `high`: 最高价  
+- `low`: 最低价
+- `close`: 收盘价
+- `volume`: 成交量
+- `amount`: 成交额
+
+### 自定义因子
+
+可以通过 `factor` 参数添加自定义因子：
+
+```python
+def add_technical_indicators(df):
+    """添加技术指标"""
+    # 移动平均
+    df['ma5'] = df['close'].rolling(5).mean()
+    df['ma20'] = df['close'].rolling(20).mean()
     
-    def subscribe_realtime(self, callback):
-        # 实现实时数据订阅逻辑
-        pass
+    # 相对强弱指标 (RSI)
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['rsi'] = 100 - (100 / (1 + rs))
+    
+    return df
 
-# 注册新数据源
-qka.register_data_source('tushare', TushareData)
+data = qka.Data(
+    symbols=['000001.SZ'],
+    factor=add_technical_indicators
+)
+```
 
-# 使用新数据源
-qka.set_source('tushare')
-data_obj = qka.data(stocks=['000001'])
+## 并发下载
+
+使用多线程并发下载提高效率：
+
+```python
+# 设置并发线程数
+data = qka.Data(
+    symbols=large_stock_list,  # 大量股票
+    pool_size=20               # 增加并发数
+)
+```
+
+## 数据缓存
+
+### 自动缓存
+
+数据会自动缓存到本地，避免重复下载：
+
+```python
+# 第一次下载数据
+data1 = qka.Data(symbols=['000001.SZ'])
+df1 = data1.get()  # 下载并缓存
+
+# 第二次使用相同参数，直接从缓存读取
+data2 = qka.Data(symbols=['000001.SZ'])  
+df2 = data2.get()  # 从缓存读取
+```
+
+### 自定义缓存目录
+
+```python
+from pathlib import Path
+
+data = qka.Data(
+    symbols=['000001.SZ'],
+    datadir=Path('/path/to/cache')  # 自定义缓存目录
+)
 ```
 
 ## 数据格式
 
-QKA统一了不同数据源的数据格式，返回标准的pandas DataFrame：
+### 返回数据格式
+
+`data.get()` 返回 Dask DataFrame，每只股票的列名格式为 `{symbol}_{column}`：
 
 ```python
-# 查看数据结构
-print(hist_data.keys())  # 获取股票列表
-print(hist_data['000001'].head())  # 查看具体股票数据
-
-# 标准数据列
-# open: 开盘价
-# high: 最高价  
-# low: 最低价
-# close: 收盘价
-# volume: 成交量
-# amount: 成交额（Akshare提供）
+df = data.get()
+print(df.columns)
+# 输出: ['000001.SZ_open', '000001.SZ_high', '000001.SZ_low', 
+#        '000001.SZ_close', '000001.SZ_volume', '000001.SZ_amount',
+#        '600000.SH_open', ...]
 ```
 
-## 数据源差异
-
-### QMT数据源特点
-- ✅ 支持历史数据和实时数据
-- ✅ 数据质量高，延迟低
-- ✅ 支持多种周期（日线、分钟线等）
-- ❗ 需要安装QMT软件环境
-
-### Akshare数据源特点  
-- ✅ 免费开源，无需授权
-- ✅ 支持前复权数据调整
-- ✅ 安装简单，依赖较少
-- ❌ 不支持实时数据订阅
-- ❗ 仅支持日线数据
-
-## 股票代码格式
-
-不同数据源的股票代码格式：
-
-| 数据源 | 格式示例 | 说明 |
-|--------|----------|------|
-| QMT | `000001.SZ` | 带交易所后缀 |
-| QMT | `600000.SH` | 沪市股票 |
-| Akshare | `000001` | 不带后缀 |
-| Akshare | `600000` | 6位数字代码 |
-
-## 常用数据字段
-
-基础数据字段（所有数据源共有）：
-
-| 字段名 | 描述 | 类型 |
-|--------|------|------|
-| open | 开盘价 | float |
-| high | 最高价 | float |
-| low | 最低价 | float |
-| close | 收盘价 | float |
-| volume | 成交量 | int |
-
-Akshare额外提供的字段：
-
-| 字段名 | 描述 | 类型 |
-|--------|------|------|
-| amount | 成交额 | float |
-
-## 错误处理
+### 数据访问
 
 ```python
-try:
-    # 使用新的API方式
-    qka.set_source('qmt')
-    data_obj = qka.data(stocks=['000001.SZ'])
-    hist_data = data_obj.get(start_time='2023-01-01')
-except ImportError as e:
-    print(f"数据源依赖缺失: {e}")
-except Exception as e:
-    print(f"数据获取失败: {e}")
+# 获取特定股票的数据
+stock_000001 = df[['000001.SZ_open', '000001.SZ_close']]
+
+# 获取特定因子的所有股票数据
+all_close = df[[col for col in df.columns if col.endswith('_close')]]
 ```
 
-## 注意事项
+## 高级用法
 
-1. **默认数据源设置**：建议在程序开始时设置默认数据源，避免重复指定
-2. **QMT环境依赖**：使用QMT数据源需要安装QMT软件和xtquant库
-3. **Akshare限制**：仅支持日线数据，不支持实时数据订阅
-4. **股票代码格式**：QMT需要带交易所后缀，Akshare使用6位数字代码
-5. **数据获取频率**：避免过于频繁的API调用
-6. **数据源扩展**：可以通过`register_data_source()`注册自定义数据源
-
-## API参考
-
-### 配置函数
-
-- `qka.set_source(source)` - 设置默认数据源
-- `qka.get_source()` - 获取当前默认数据源
-- `qka.get_available_sources()` - 获取所有可用数据源
-- `qka.register_data_source(name, class)` - 注册新数据源
-
-### 工厂函数
-
-- `qka.data(stocks=None, sector=None, source=None)` - 创建数据对象
-
-### Data对象方法
-
-- `data_obj.get(period='1d', start_time='', end_time='')` - 获取历史数据
-- `data_obj.subscribe(callback)` - 订阅实时数据
-- `data_obj.stocks` - 获取股票列表
-
-## 完整示例
-
-### 基础使用流程
+### 批量处理大量股票
 
 ```python
-import qka
+# 获取A股所有股票列表（需要akshare）
+import akshare as ak
+stock_list = ak.stock_info_a_code_name()['code'].tolist()
 
-# 1. 设置默认数据源
-qka.set_source('akshare')
-
-# 2. 创建数据对象
-data_obj = qka.data(stocks=['000001', '600000'])
-
-# 3. 获取历史数据
-hist_data = data_obj.get(start_time='2023-01-01', end_time='2023-12-31')
-
-# 4. 查看数据
-for stock_code, df in hist_data.items():
-    print(f"\n{stock_code} 数据概览:")
-    print(df.head())
-    print(f"数据行数: {len(df)}")
+# 分批处理
+batch_size = 100
+for i in range(0, len(stock_list), batch_size):
+    batch = stock_list[i:i+batch_size]
+    data = qka.Data(symbols=batch, pool_size=10)
+    df_batch = data.get()
+    # 处理这批数据...
 ```
 
-### 混合使用多个数据源
+### 数据更新
 
 ```python
-import qka
+# 强制更新缓存（重新下载）
+import shutil
+shutil.rmtree('datadir')  # 删除缓存目录
 
-# 设置默认数据源为akshare
-qka.set_source('akshare')
-
-# 大部分使用默认数据源
-data_ak = qka.data(stocks=['000001', '600000'])
-hist_data_ak = data_ak.get(start_time='2023-01-01')
-
-# 临时使用QMT获取实时数据
-data_qmt = qka.data(stocks=['000001.SZ'], source='qmt')
-def on_realtime_data(code, item):
-    print(f"实时数据 - {code}: {item['lastPrice']}")
-
-data_qmt.subscribe(on_realtime_data)
+# 或者指定新的缓存目录
+data = qka.Data(symbols=['000001.SZ'], datadir='./new_cache')
 ```
+
+## 性能优化建议
+
+1. **合理设置并发数**: 根据网络情况和系统资源调整 `pool_size`
+2. **使用缓存**: 充分利用数据缓存避免重复下载
+3. **分批处理**: 对于大量股票，分批处理避免内存不足
+4. **选择合适的周期**: 根据策略需求选择合适的数据周期
+
+## 常见问题
+
+### Q: 数据下载失败怎么办？
+
+A: 检查网络连接，确认股票代码格式正确，可以尝试：
+- 减少并发数
+- 更换数据源
+- 检查股票代码是否有效
+
+### Q: 如何获取实时数据？
+
+A: 目前主要支持历史数据，实时数据可以通过 QMT 接口获取。
+
+### Q: 数据包含哪些时间段？
+
+A: 默认包含该股票的所有可用历史数据。
+
+## 下一步
+
+- 学习 [回测分析](backtest.md) 了解如何使用数据进行策略回测
+- 查看 [API 文档](../api/core/data.md) 了解完整的数据接口
+- 参考 [示例教程](../examples/basic/data-fetching.md) 获取更多代码示例
