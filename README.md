@@ -1,4 +1,4 @@
-# QKA - 快捷量化助手
+# QKA - 快量化
 
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
