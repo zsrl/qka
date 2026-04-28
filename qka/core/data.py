@@ -44,14 +44,15 @@ class Data():
     ):
         """
         初始化数据对象
-        
+
         Args:
-            symbols: [维度1] 标的，如 ['000001.SZ', '600000.SH']
-            period: [维度2] 周期，如 '1m', '5m', '1d' 等
-            factor: [维度3] 因子字典，key为因子名，value为因子函数
-            source: [维度4] 数据来源 ('qmt', 'akshare')
-            pool_size: 并发池大小
-            datadir: 缓存根目录，默认为项目根目录下的 datadir
+            symbols: 股票代码列表，如 ['000001.SZ', '600000.SH']
+            period: 数据周期，如 '1d'（日线）、'1m'（分钟）
+            adjust: 复权方式，'qfq'（前复权）、'hfq'（后复权）、'bfq'（不复权）
+            factor: 因子计算函数，接收 DataFrame 返回 DataFrame，用于扩展自定义因子
+            source: 数据来源，'akshare'（默认）或 'qmt'
+            pool_size: 并发下载线程数
+            datadir: 缓存根目录，默认为当前工作目录下的 datadir/
         """
         self.symbols = symbols or []
         self.period = period

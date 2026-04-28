@@ -130,6 +130,3 @@ nav:
     - 核心模块: api/core.md
     - 交易模块: api/brokers.md
     - 工具模块: api/utils.md
-  - 示例教程:
-    - 基础示例: examples/basic.md
-  - 更新日志: changelog.md

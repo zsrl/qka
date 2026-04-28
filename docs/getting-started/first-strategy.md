@@ -1,176 +1,152 @@
 # 第一个策略
 
-本指南将带你创建第一个简单的量化策略，包括数据获取、策略开发和回测分析。
+本指南带你从零跑通第一个策略——5 日均线买入持有。整个过程只需要几步。
 
-## 策略目标
+---
 
-创建一个简单的移动平均策略：
-- 当短期均线上穿长期均线时买入
-- 当短期均线下穿长期均线时卖出
-
-## 步骤1：数据获取
-
-首先，我们需要获取股票数据：
+## 步骤 1：获取数据
 
 ```python
-import qka
+from qka.core.data import Data
 
-# 创建数据对象
-data = qka.Data(
-    symbols=['000001.SZ', '600000.SH'],  # 股票代码列表
-    period='1d',                         # 日线数据
-    adjust='qfq'                         # 前复权
-)
-
-# 获取数据
-df = data.get()
-print(f"数据形状: {df.shape}")
-print(df.head())
+data = Data(symbols=['000001.SZ'])   # 平安银行
 ```
 
-## 步骤2：创建策略
+`Data` 会自动从 akshare 下载数据并缓存到本地（`datadir/` 目录），下次运行直接读缓存，不用重复下载。
 
-继承 `qka.Strategy` 类并实现 `on_bar` 方法：
+---
+
+## 步骤 2：定义策略
+
+所有策略都继承 `Strategy` 基类，实现 `on_bar` 方法：
 
 ```python
-class MovingAverageStrategy(qka.Strategy):
+from qka.core.strategy import Strategy
+from qka.core.broker import Broker
+
+class BuyAndHold(Strategy):
+    """买入 100 股平安银行并持有"""
     def __init__(self):
-        super().__init__()
-        self.ma_short = 5    # 短期均线周期
-        self.ma_long = 20    # 长期均线周期
-        self.positions = {}  # 持仓记录
-    
+        super().__init__(cash=100_000)
+        self.broker = Broker(initial_cash=100_000)  # 10万元本金
+        self.bought = False
+
     def on_bar(self, date, get):
         """
-        每个bar的处理逻辑
-        
+        每个交易日调用一次。
+
         Args:
-            date: 当前时间戳
+            date: 当前日期
             get: 获取因子数据的函数
+                 get('close')  → 返回 pd.Series, index=股票代码
+                 get('volume') → 返回 pd.Series
         """
-        # 获取当前价格数据
-        close_prices = get('close')
-        
-        # 遍历所有股票
-        for symbol in close_prices.index:
-            # 获取该股票的历史数据
-            symbol_close = get('close')[symbol]
-            
-            # 计算移动平均
-            if len(symbol_close) >= self.ma_long:
-                ma_short = symbol_close[-self.ma_short:].mean()
-                ma_long = symbol_close[-self.ma_long:].mean()
-                
-                current_price = symbol_close.iloc[-1]
-                
-                # 交易逻辑
-                if ma_short > ma_long and symbol not in self.positions:
-                    # 短期均线上穿长期均线，买入
-                    size = int(self.broker.cash * 0.1 / current_price)  # 使用10%资金
-                    if size > 0:
-                        self.broker.buy(symbol, current_price, size)
-                        self.positions[symbol] = True
-                        
-                elif ma_short < ma_long and symbol in self.positions:
-                    # 短期均线下穿长期均线，卖出
-                    position = self.broker.positions.get(symbol)
-                    if position:
-                        self.broker.sell(symbol, current_price, position['size'])
-                        del self.positions[symbol]
+        close = get('close')
+        if not self.bought and '000001.SZ' in close.index:
+            price = float(close['000001.SZ'])
+            self.broker.buy('000001.SZ', price, 100)
+            self.bought = True
 ```
 
-## 步骤3：运行回测
+### 关键规则
 
-创建策略实例并运行回测：
+- `get('close')` 返回**当前 bar 的横截面数据**（所有股票的最新收盘价），不是历史序列
+- `self.broker.buy(symbol, price, size)` 自动计算佣金和滑点
+- broker 有 **仓位限制** 和 **资金检查**，资金不够会自动拒绝
+
+---
+
+## 步骤 3：运行回测
 
 ```python
-# 创建策略实例
-strategy = MovingAverageStrategy()
+from qka.core.backtest import Backtest
 
-# 创建回测引擎
-backtest = qka.Backtest(data, strategy)
-
-# 运行回测
-print("开始回测...")
-backtest.run()
-print("回测完成！")
-
-# 查看回测结果
-print(f"最终资金: {strategy.broker.cash:.2f}")
-print(f"持仓情况: {strategy.broker.positions}")
+bt = Backtest(data, BuyAndHold())
+bt.run(benchmark='000300.SH')   # 对比沪深300
 ```
 
-## 步骤4：可视化结果
+`bt.run()` 会：
+1. 按日期遍历所有数据
+2. 每天调用策略的 `on_bar` 方法
+3. 自动记录资金、持仓和交易历史
+4. 如果指定了 `benchmark`，自动下载基准数据
 
-使用内置的可视化功能查看回测结果：
+---
+
+## 步骤 4：查看结果
+
+### 绩效指标
 
 ```python
-# 绘制收益曲线
-fig = backtest.plot("移动平均策略回测结果")
-
-# 查看详细交易记录
-trades_df = strategy.broker.trades
-print("交易记录:")
-print(trades_df.tail())
-
-# 计算收益率
-initial_cash = 100000
-final_total = trades_df['total'].iloc[-1]
-total_return = (final_total - initial_cash) / initial_cash * 100
-print(f"总收益率: {total_return:.2f}%")
+bt.summary()
 ```
 
-## 完整代码示例
+输出示例：
+
+```
+=======================================================
+           回测绩效报告
+=======================================================
+  初始资金:         RMB 100,000.00
+  最终资产:         RMB 156,283.45
+  总收益率:          +56.28%
+  年化收益率:        +8.34%
+  夏普比率:           0.52
+  最大回撤:          -42.37%
+  胜率:              100.00%
+  总手续费:          RMB 67.50
+=======================================================
+```
+
+### HTML 报告
 
 ```python
-import qka
+bt.report(title='买入持有策略')
+# 自动保存到 examples/charts/ 下
+```
 
-class MovingAverageStrategy(qka.Strategy):
+报告包含：
+- 8 个核心指标卡片
+- 净值曲线（含基准对比）+ 回撤曲线
+- 月度收益率热力图
+- 交易明细表
+- 回撤分析表
+
+在手机上也能正常查看——窄屏下表格自动变为堆叠卡片布局。
+
+---
+
+## 完整代码
+
+```python
+from qka.core.data import Data
+from qka.core.strategy import Strategy
+from qka.core.broker import Broker
+from qka.core.backtest import Backtest
+
+class BuyAndHold(Strategy):
     def __init__(self):
-        super().__init__()
-        self.ma_short = 5
-        self.ma_long = 20
-        self.positions = {}
-    
-    def on_bar(self, date, get):
-        close_prices = get('close')
-        
-        for symbol in close_prices.index:
-            symbol_close = get('close')[symbol]
-            
-            if len(symbol_close) >= self.ma_long:
-                ma_short = symbol_close[-self.ma_short:].mean()
-                ma_long = symbol_close[-self.ma_long:].mean()
-                current_price = symbol_close.iloc[-1]
-                
-                if ma_short > ma_long and symbol not in self.positions:
-                    size = int(self.broker.cash * 0.1 / current_price)
-                    if size > 0:
-                        self.broker.buy(symbol, current_price, size)
-                        self.positions[symbol] = True
-                elif ma_short < ma_long and symbol in self.positions:
-                    position = self.broker.positions.get(symbol)
-                    if position:
-                        self.broker.sell(symbol, current_price, position['size'])
-                        del self.positions[symbol]
+        super().__init__(cash=100_000)
+        self.broker = Broker(initial_cash=100_000)
+        self.bought = False
 
-# 执行策略
-data = qka.Data(symbols=['000001.SZ', '600000.SH'], period='1d')
-strategy = MovingAverageStrategy()
-backtest = qka.Backtest(data, strategy)
-backtest.run()
-backtest.plot()
+    def on_bar(self, date, get):
+        close = get('close')
+        if not self.bought and '000001.SZ' in close.index:
+            self.broker.buy('000001.SZ', float(close['000001.SZ']), 100)
+            self.bought = True
+
+data = Data(symbols=['000001.SZ'])
+bt = Backtest(data, BuyAndHold())
+bt.run(benchmark='000300.SH')
+bt.summary()
+bt.report(title='买入持有策略')
 ```
 
-## 策略优化建议
-
-1. **参数调优**: 尝试不同的均线周期组合
-2. **风险控制**: 添加止损和仓位控制
-3. **多因子**: 结合其他技术指标
-4. **数据验证**: 使用更长时间段的数据进行验证
+---
 
 ## 下一步
 
-- 学习 [基础概念](concepts.md) 深入了解 QKA 架构
-- 查看 [用户指南](../user-guide/data.md) 学习更多高级功能
-- 参考 [API 文档](../api/core/data.md) 了解完整接口说明
+- 学习 [回测分析](../user-guide/backtest.md) — 手续费设置、绩效指标详解
+- 了解 [核心概念](concepts.md) — 架构设计、数据流
+- 查看 [API 参考](../api/core.md) — 完整接口说明

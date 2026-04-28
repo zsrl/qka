@@ -47,6 +47,10 @@ class Backtest:
         Args:
             benchmark (str, optional): 基准代码，如 '000300.SH'（沪深300）。
                                        如果提供，会下载基准数据用于对比。
+
+        Returns:
+            None。回测结果保存在 self.results 中，可通过
+            self.summary() 查看绩效指标，self.report() 生成报告。
         """
         # 获取所有股票数据（dask DataFrame）
         df = self.data.get()
