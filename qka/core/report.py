@@ -212,7 +212,7 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
        background: #f0f2f5; color: #333; }}
 .container {{ max-width: 1100px; margin: 0 auto; padding: 20px; }}
 .header {{ background: linear-gradient(135deg, #2E86AB, #1a5276); color: white;
-           padding: 30px; border-radius: 12px; margin-bottom: 24px; }}
+           padding: 28px 30px; border-radius: 12px; margin-bottom: 24px; }}
 .header h1 {{ font-size: 24px; margin-bottom: 6px; }}
 .header p {{ opacity: 0.85; font-size: 14px; }}
 .cards {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }}
@@ -222,11 +222,13 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
 .card-value.positive {{ color: #27ae60; }}
 .card-value.negative {{ color: #e74c3c; }}
 .chart-box {{ background: white; border-radius: 10px; padding: 16px; margin-bottom: 24px;
-             box-shadow: 0 2px 8px rgba(0,0,0,0.06); }}
+             box-shadow: 0 2px 8px rgba(0,0,0,0.06); overflow: hidden; }}
 .chart-box h2 {{ font-size: 16px; margin-bottom: 12px; color: #555; }}
-table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
-th {{ background: #2E86AB; color: white; padding: 10px 12px; text-align: left; font-weight: 500; }}
-td {{ padding: 8px 12px; border-bottom: 1px solid #eee; }}
+.table-wrap {{ overflow-x: auto; -webkit-overflow-scrolling: touch; }}
+table {{ width: 100%; border-collapse: collapse; font-size: 13px; min-width: 600px; }}
+th {{ background: #2E86AB; color: white; padding: 10px 12px; text-align: left; font-weight: 500;
+     white-space: nowrap; }}
+td {{ padding: 8px 12px; border-bottom: 1px solid #eee; white-space: nowrap; }}
 tr:hover td {{ background: #f8f9fa; }}
 .tag-buy {{ display: inline-block; padding: 2px 8px; border-radius: 4px;
             font-size: 11px; font-weight: 600; background: #e8f8f5; color: #27ae60; }}
@@ -235,7 +237,34 @@ tr:hover td {{ background: #f8f9fa; }}
 .pnl-positive {{ color: #27ae60; font-weight: 600; }}
 .pnl-negative {{ color: #e74c3c; font-weight: 600; }}
 .footer {{ text-align: center; padding: 20px; color: #999; font-size: 12px; }}
-@media (max-width: 768px) {{ .cards {{ grid-template-columns: repeat(2, 1fr); }} }}
+/* 平板 */
+@media (max-width: 768px) {{
+  .container {{ padding: 12px; }}
+  .header {{ padding: 20px; }}
+  .header h1 {{ font-size: 20px; }}
+  .cards {{ grid-template-columns: repeat(2, 1fr); gap: 10px; }}
+  .card {{ padding: 12px; }}
+  .card-value {{ font-size: 18px; }}
+  .chart-box {{ padding: 12px; }}
+  table {{ font-size: 12px; min-width: 500px; }}
+  th, td {{ padding: 8px; }}
+}}
+/* 手机 */
+@media (max-width: 480px) {{
+  .container {{ padding: 8px; }}
+  .header {{ padding: 16px; border-radius: 8px; margin-bottom: 16px; }}
+  .header h1 {{ font-size: 17px; }}
+  .header p {{ font-size: 12px; }}
+  .cards {{ grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 16px; }}
+  .card {{ padding: 10px; border-radius: 8px; }}
+  .card-label {{ font-size: 10px; }}
+  .card-value {{ font-size: 15px; }}
+  .chart-box {{ padding: 10px; border-radius: 8px; margin-bottom: 16px; }}
+  .chart-box h2 {{ font-size: 14px; }}
+  table {{ font-size: 11px; min-width: 420px; }}
+  th, td {{ padding: 6px 8px; }}
+  .footer {{ font-size: 10px; padding: 12px; }}
+}}
 </style>
 </head>
 <body>
@@ -296,7 +325,7 @@ tr:hover td {{ background: #f8f9fa; }}
 
   <div class="chart-box">
     <h2>交易明细</h2>
-    <div style="overflow-x: auto;">
+    <div class="table-wrap">
       <table>
         <thead><tr>
           <th>日期</th><th>方向</th><th>代码</th><th>数量</th>
@@ -312,7 +341,7 @@ tr:hover td {{ background: #f8f9fa; }}
   {f'''
   <div class="chart-box">
     <h2>回撤分析</h2>
-    <div style="overflow-x: auto;">
+    <div class="table-wrap">
       <table>
         <thead><tr>
           <th>#</th><th>开始</th><th>结束</th>
