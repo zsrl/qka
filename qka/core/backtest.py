@@ -317,3 +317,34 @@ class Backtest:
             pass  # 保存失败不阻塞主流程
 
         return fig
+
+    def report(self, title: str = "未命名策略", output_path: Optional[str] = None) -> str:
+        """
+        生成自包含的 HTML 回测报告
+
+        包含绩效指标卡片、净值曲线、回撤曲线、月度收益率热力图、
+        交易明细表和回撤分析。可直接在浏览器中打开。
+
+        Args:
+            title: 策略名称（显示在报告标题中）
+            output_path: 输出 HTML 文件路径。
+                         None 则自动保存在 examples/charts/ 下
+
+        Returns:
+            str: HTML 文件路径
+        """
+        from qka.core.report import generate_report
+
+        if self.results is None or self.results.empty:
+            print("错误：请先运行回测 (bt.run())")
+            return ""
+
+        bm = getattr(self, '_benchmark_data', None)
+        return generate_report(
+            results=self.results,
+            broker=self.strategy.broker,
+            initial_cash=self.initial_cash,
+            benchmark_data=bm,
+            strategy_name=title,
+            output_path=output_path,
+        )
