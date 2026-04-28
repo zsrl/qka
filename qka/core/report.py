@@ -199,117 +199,231 @@ def _build_html(metrics: dict, equity_chart_json: str,
     """构建完整的 HTML 报告"""
     now = datetime.now().strftime('%Y-%m-%d %H:%M')
 
+    # ---- 预计算条件渲染区块 ----
+    monthly_chart_div = ''
+    monthly_chart_js = ''
+    if monthly_chart_json:
+        monthly_chart_div = (
+            '<div class="chart-box">\n'
+            '    <div id="monthlyChart"></div>\n'
+            '  </div>')
+        monthly_chart_js = (
+            '\nvar monthlyData = ' + monthly_chart_json + ';\n'
+            "Plotly.newPlot('monthlyChart', monthlyData.data, monthlyData.layout, {responsive: true});")
+
+    drawdown_section = ''
+    if drawdown_rows:
+        drawdown_section = (
+            '<div class="chart-box">\n'
+            '    <h2>\u56de\u64a4\u5206\u6790</h2>\n'
+            '    <div class="table-wrap">\n'
+            '      <table>\n'
+            '        <thead><tr>\n'
+            '          <th>#</th><th>\u5f00\u59cb</th><th>\u7ed3\u675f</th>\n'
+            '          <th>\u56de\u64a4\u5e45\u5ea6</th><th>\u6301\u7eed\u5929\u6570</th>\n'
+            '        </tr></thead>\n'
+            '        <tbody>\n'
+            + drawdown_rows +
+            '\n        </tbody>\n'
+            '      </table>\n'
+            '    </div>\n'
+            '  </div>')
+
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>QKA 回测报告 - {strategy_name}</title>
+<title>QKA \u56de\u6d4b\u62a5\u544a - {strategy_name}</title>
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <style>
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-       background: #f0f2f5; color: #333; }}
+body {{
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #f0f2f5; color: #333;
+}}
 .container {{ max-width: 1100px; margin: 0 auto; padding: 20px; }}
-.header {{ background: linear-gradient(135deg, #2E86AB, #1a5276); color: white;
-           padding: 28px 30px; border-radius: 12px; margin-bottom: 24px; }}
+
+/* ---- Header ---- */
+.header {{
+  background: linear-gradient(135deg, #2E86AB, #1a5276); color: white;
+  padding: 28px 30px; border-radius: 12px; margin-bottom: 24px;
+}}
 .header h1 {{ font-size: 24px; margin-bottom: 6px; }}
 .header p {{ opacity: 0.85; font-size: 14px; }}
-.cards {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }}
-.card {{ background: white; border-radius: 10px; padding: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }}
+
+/* ---- Cards ---- */
+.cards {{
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 24px;
+}}
+.card {{
+  background: white; border-radius: 10px; padding: 16px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}}
 .card-label {{ font-size: 12px; color: #888; margin-bottom: 4px; }}
 .card-value {{ font-size: 22px; font-weight: 700; }}
 .card-value.positive {{ color: #27ae60; }}
 .card-value.negative {{ color: #e74c3c; }}
-.chart-box {{ background: white; border-radius: 10px; padding: 16px; margin-bottom: 24px;
-             box-shadow: 0 2px 8px rgba(0,0,0,0.06); overflow: hidden; }}
+
+/* ---- Chart boxes ---- */
+.chart-box {{
+  background: white; border-radius: 10px; padding: 16px; margin-bottom: 24px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06); overflow: hidden;
+}}
 .chart-box h2 {{ font-size: 16px; margin-bottom: 12px; color: #555; }}
+
+/* ---- Tables ---- */
 .table-wrap {{ overflow-x: auto; -webkit-overflow-scrolling: touch; }}
-table {{ width: 100%; border-collapse: collapse; font-size: 13px; min-width: 600px; }}
-th {{ background: #2E86AB; color: white; padding: 10px 12px; text-align: left; font-weight: 500;
-     white-space: nowrap; }}
+table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+th {{
+  background: #2E86AB; color: white; padding: 10px 12px; text-align: left;
+  font-weight: 500; white-space: nowrap;
+}}
 td {{ padding: 8px 12px; border-bottom: 1px solid #eee; white-space: nowrap; }}
 tr:hover td {{ background: #f8f9fa; }}
-.tag-buy {{ display: inline-block; padding: 2px 8px; border-radius: 4px;
-            font-size: 11px; font-weight: 600; background: #e8f8f5; color: #27ae60; }}
-.tag-sell {{ display: inline-block; padding: 2px 8px; border-radius: 4px;
-             font-size: 11px; font-weight: 600; background: #fdedec; color: #e74c3c; }}
+
+/* ---- Tags ---- */
+.tag-buy {{
+  display: inline-block; padding: 2px 8px; border-radius: 4px;
+  font-size: 11px; font-weight: 600; background: #e8f8f5; color: #27ae60;
+}}
+.tag-sell {{
+  display: inline-block; padding: 2px 8px; border-radius: 4px;
+  font-size: 11px; font-weight: 600; background: #fdedec; color: #e74c3c;
+}}
 .pnl-positive {{ color: #27ae60; font-weight: 600; }}
 .pnl-negative {{ color: #e74c3c; font-weight: 600; }}
 .footer {{ text-align: center; padding: 20px; color: #999; font-size: 12px; }}
-/* 平板 */
+
+/* =====================================================
+   Tablet landscape & small desktop (769px - 1024px)
+   ===================================================== */
+@media (max-width: 1024px) {{
+  .container {{ padding: 16px; }}
+  .cards {{ gap: 10px; }}
+  .card-value {{ font-size: 20px; }}
+  .header h1 {{ font-size: 22px; }}
+}}
+
+/* =====================================================
+   Tablet portrait (481px - 768px)
+   ===================================================== */
 @media (max-width: 768px) {{
   .container {{ padding: 12px; }}
   .header {{ padding: 20px; }}
   .header h1 {{ font-size: 20px; }}
+  .header p {{ font-size: 13px; }}
   .cards {{ grid-template-columns: repeat(2, 1fr); gap: 10px; }}
   .card {{ padding: 12px; }}
   .card-value {{ font-size: 18px; }}
   .chart-box {{ padding: 12px; }}
-  table {{ font-size: 12px; min-width: 500px; }}
-  th, td {{ padding: 8px; }}
+  table {{ font-size: 12px; }}
+  th, td {{ padding: 8px 10px; }}
 }}
-/* 手机 */
+
+/* =====================================================
+   Phone (<=480px) — tables become stacked cards
+   ===================================================== */
 @media (max-width: 480px) {{
-  .container {{ padding: 8px; }}
-  .header {{ padding: 16px; border-radius: 8px; margin-bottom: 16px; }}
-  .header h1 {{ font-size: 17px; }}
-  .header p {{ font-size: 12px; }}
-  .cards {{ grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 16px; }}
-  .card {{ padding: 10px; border-radius: 8px; }}
-  .card-label {{ font-size: 10px; }}
-  .card-value {{ font-size: 15px; }}
-  .chart-box {{ padding: 10px; border-radius: 8px; margin-bottom: 16px; }}
-  .chart-box h2 {{ font-size: 14px; }}
-  table {{ font-size: 11px; min-width: 420px; }}
-  th, td {{ padding: 6px 8px; }}
-  .footer {{ font-size: 10px; padding: 12px; }}
+  .container {{ padding: 6px; }}
+  .header {{ padding: 14px 12px; border-radius: 8px; margin-bottom: 14px; }}
+  .header h1 {{ font-size: 16px; }}
+  .header p {{ font-size: 11px; }}
+  .cards {{ grid-template-columns: repeat(2, 1fr); gap: 6px; margin-bottom: 14px; }}
+  .card {{ padding: 10px 8px; border-radius: 8px; }}
+  .card-label {{ font-size: 9px; margin-bottom: 2px; }}
+  .card-value {{ font-size: 14px; }}
+  .chart-box {{ padding: 8px; border-radius: 8px; margin-bottom: 14px; }}
+  .chart-box h2 {{ font-size: 13px; margin-bottom: 8px; }}
+  .footer {{ font-size: 9px; padding: 10px; }}
+
+  /* ---- Tables rightarrow stacked card layout ---- */
+  .table-wrap table,
+  .table-wrap thead,
+  .table-wrap tbody,
+  .table-wrap th,
+  .table-wrap td,
+  .table-wrap tr {{
+    display: block;
+  }}
+  .table-wrap thead {{ display: none; }}
+  .table-wrap tr {{
+    margin-bottom: 8px;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 10px 12px;
+    background: white;
+  }}
+  .table-wrap td {{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 5px 0;
+    border-bottom: 1px solid #f0f0f0;
+    white-space: normal;
+    font-size: 13px;
+  }}
+  .table-wrap td:last-child {{ border-bottom: none; }}
+  .table-wrap td::before {{
+    content: attr(data-label);
+    font-weight: 600;
+    color: #888;
+    font-size: 12px;
+    flex-shrink: 0;
+    margin-right: 12px;
+  }}
+  .table-wrap td:first-child {{ padding-top: 0; }}
+  .table-wrap td:last-child {{ padding-bottom: 0; }}
+  .table-wrap tr:hover td {{ background: transparent; }}
 }}
 </style>
 </head>
 <body>
 <div class="container">
   <div class="header">
-    <h1>QKA 回测报告</h1>
-    <p>策略: {strategy_name} &nbsp;|&nbsp; 生成时间: {now}</p>
+    <h1>QKA \u56de\u6d4b\u62a5\u544a</h1>
+    <p>\u7b56\u7565: {strategy_name} &nbsp;|&nbsp; \u751f\u6210\u65f6\u95f4: {now}</p>
   </div>
 
   <div class="cards">
     <div class="card">
-      <div class="card-label">总收益率</div>
+      <div class="card-label">\u603b\u6536\u76ca\u7387</div>
       <div class="card-value {'positive' if metrics['total_return_pct'] >= 0 else 'negative'}">
         {metrics['total_return_pct']:+.2f}%
       </div>
     </div>
     <div class="card">
-      <div class="card-label">年化收益率</div>
+      <div class="card-label">\u5e74\u5316\u6536\u76ca\u7387</div>
       <div class="card-value {'positive' if metrics['annual_return_pct'] >= 0 else 'negative'}">
         {metrics['annual_return_pct']:+.2f}%
       </div>
     </div>
     <div class="card">
-      <div class="card-label">夏普比率</div>
+      <div class="card-label">\u590f\u666e\u6bd4\u7387</div>
       <div class="card-value">{metrics['sharpe_ratio']:.2f}</div>
     </div>
     <div class="card">
-      <div class="card-label">最大回撤</div>
+      <div class="card-label">\u6700\u5927\u56de\u64a4</div>
       <div class="card-value negative">{metrics['max_drawdown_pct']:.2f}%</div>
     </div>
     <div class="card">
-      <div class="card-label">胜率</div>
+      <div class="card-label">\u80dc\u7387</div>
       <div class="card-value">{metrics['win_rate_pct']:.1f}%</div>
     </div>
     <div class="card">
-      <div class="card-label">盈亏比</div>
+      <div class="card-label">\u76c8\u4e8f\u6bd4</div>
       <div class="card-value">{metrics['profit_loss_ratio']:.2f}</div>
     </div>
     <div class="card">
-      <div class="card-label">交易次数</div>
+      <div class="card-label">\u4ea4\u6613\u6b21\u6570</div>
       <div class="card-value">{metrics['total_trades']}</div>
     </div>
     <div class="card">
-      <div class="card-label">总手续费</div>
-      <div class="card-value">¥{metrics['total_commission']:,.2f}</div>
+      <div class="card-label">\u603b\u624b\u7eed\u8d39</div>
+      <div class="card-value">\u00a5{metrics['total_commission']:,.2f}</div>
     </div>
   </div>
 
@@ -317,19 +431,15 @@ tr:hover td {{ background: #f8f9fa; }}
     <div id="equityChart"></div>
   </div>
 
-  {f'''
-  <div class="chart-box">
-    <div id="monthlyChart"></div>
-  </div>
-  ''' if monthly_chart_json else ''}
+  {monthly_chart_div}
 
   <div class="chart-box">
-    <h2>交易明细</h2>
+    <h2>\u4ea4\u6613\u660e\u7ec6</h2>
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th>日期</th><th>方向</th><th>代码</th><th>数量</th>
-          <th>成交价</th><th>成交金额</th><th>手续费</th>
+          <th>\u65e5\u671f</th><th>\u65b9\u5411</th><th>\u4ee3\u7801</th><th>\u6570\u91cf</th>
+          <th>\u6210\u4ea4\u4ef7</th><th>\u6210\u4ea4\u91d1\u989d</th><th>\u624b\u7eed\u8d39</th>
         </tr></thead>
         <tbody>
           {trades_table_rows}
@@ -338,43 +448,24 @@ tr:hover td {{ background: #f8f9fa; }}
     </div>
   </div>
 
-  {f'''
-  <div class="chart-box">
-    <h2>回撤分析</h2>
-    <div class="table-wrap">
-      <table>
-        <thead><tr>
-          <th>#</th><th>开始</th><th>结束</th>
-          <th>回撤幅度</th><th>持续天数</th>
-        </tr></thead>
-        <tbody>
-          {drawdown_rows}
-        </tbody>
-      </table>
-    </div>
-  </div>
-  ''' if drawdown_rows else ''}
+  {drawdown_section}
 
   <div class="footer">
-    由 QKA (github.com/zsrl/qka) 生成
+    \u7531 QKA (github.com/zsrl/qka) \u751f\u6210
   </div>
 </div>
 
 <script>
 var equityData = {equity_chart_json};
 Plotly.newPlot('equityChart', equityData.data, equityData.layout, {{responsive: true}});
-
-{f'''
-var monthlyData = {monthly_chart_json};
-Plotly.newPlot('monthlyChart', monthlyData.data, monthlyData.layout, {{responsive: true}});
-''' if monthly_chart_json else ''}
+{monthly_chart_js}
 </script>
 </body>
 </html>"""
 
 
 def _build_trades_table(trades: list) -> str:
-    """生成交易明细 HTML 行"""
+    """生成交易明细 HTML 行（带 data-label 属性，用于移动端卡片化）"""
     rows = []
     for t in trades:
         action = t['action']
@@ -385,27 +476,27 @@ def _build_trades_table(trades: list) -> str:
         ts = t.get('timestamp', '')
         ts_str = str(ts.date()) if hasattr(ts, 'date') else str(ts)[:10]
         rows.append(f'''<tr>
-          <td>{ts_str}</td>
-          <td>{tag}</td>
-          <td>{t['symbol']}</td>
-          <td>{t['size']:,}</td>
-          <td>¥{price:.2f}</td>
-          <td>¥{amount:,.2f}</td>
-          <td>¥{comm:.2f}</td>
+          <td data-label="日期">{ts_str}</td>
+          <td data-label="方向">{tag}</td>
+          <td data-label="代码">{t['symbol']}</td>
+          <td data-label="数量">{t['size']:,}</td>
+          <td data-label="成交价">¥{price:.2f}</td>
+          <td data-label="成交金额">¥{amount:,.2f}</td>
+          <td data-label="手续费">¥{comm:.2f}</td>
         </tr>''')
     return '\n'.join(rows)
 
 
 def _build_drawdown_table(dd_list: list) -> str:
-    """生成回撤分析 HTML 行"""
+    """生成回撤分析 HTML 行（带 data-label 属性，用于移动端卡片化）"""
     rows = []
     for i, d in enumerate(dd_list, 1):
         rows.append(f'''<tr>
-          <td>{i}</td>
-          <td>{d['start'].date()}</td>
-          <td>{d['end'].date()}</td>
-          <td class="pnl-negative">{d['depth']:.2f}%</td>
-          <td>{d['duration']}</td>
+          <td data-label="#">{i}</td>
+          <td data-label="开始">{d['start'].date()}</td>
+          <td data-label="结束">{d['end'].date()}</td>
+          <td data-label="回撤幅度" class="pnl-negative">{d['depth']:.2f}%</td>
+          <td data-label="持续天数">{d['duration']} 天</td>
         </tr>''')
     return '\n'.join(rows)
 
@@ -537,5 +628,5 @@ def generate_report(
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html)
 
-    print(f"📄 回测报告已生成: {output_path}")
+    print(f"[OK] 回测报告已生成: {output_path}")
     return output_path

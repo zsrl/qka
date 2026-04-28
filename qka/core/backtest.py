@@ -6,9 +6,7 @@
 
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
 from typing import Optional
-from pathlib import Path
 
 
 class Backtest:
@@ -209,8 +207,8 @@ class Backtest:
         print("=" * 55)
         print("           回测绩效报告")
         print("=" * 55)
-        print(f"  初始资金:        ¥{initial:>10,.2f}")
-        print(f"  最终资产:        ¥{final:>10,.2f}")
+        print(f"  初始资金:        RMB {initial:>10,.2f}")
+        print(f"  最终资产:        RMB {final:>10,.2f}")
         print(f"  总收益率:         {total_return:>+8.2f}%")
         print(f"  年化收益率:       {annual_return * 100:>+8.2f}%")
         print(f"  年化波动率:       {annual_vol * 100:>8.2f}%")
@@ -220,7 +218,7 @@ class Backtest:
         print(f"  交易次数:         {n_trades:>8}")
         print(f"  胜率:             {win_rate:>8.2f}%")
         print(f"  盈亏比:           {profit_loss_ratio:>8.2f}")
-        print(f"  总手续费:         ¥{total_commission:>10,.2f}")
+        print(f"  总手续费:         RMB {total_commission:>10,.2f}")
         print(f"  回测天数:         {n_days:>8} 天")
         print("=" * 55)
 
@@ -239,84 +237,6 @@ class Backtest:
             'total_commission': total_commission,
             'n_days': n_days,
         }
-
-    def plot(self, title="回测收益曲线"):
-        """
-        绘制回测收益曲线
-
-        展示策略总资产变化曲线，如果设置了基准则叠加基准曲线。
-
-        Args:
-            title (str): 图表标题
-
-        Returns:
-            go.Figure: Plotly图表对象
-        """
-        if self.results is None or self.results.empty:
-            print("请先运行回测 (backtest.run())")
-            return None
-
-        fig = go.Figure()
-
-        # 策略收益曲线
-        fig.add_trace(go.Scatter(
-            x=self.results.index,
-            y=self.results['total'],
-            mode='lines',
-            name='策略资产',
-            line=dict(color='#2E86AB', width=3),
-            hovertemplate='日期: %{x}<br>策略资产: ¥%{y:,.2f}<extra></extra>'
-        ))
-
-        # 基准曲线（如果有）
-        if self._benchmark_data is not None:
-            # 对齐基准到回测时间范围
-            bm = self._benchmark_data.reindex(self.results.index, method='ffill')
-            if not bm.empty:
-                # 归一化基准到初始资金起点
-                bm_normalized = bm / bm.iloc[0] * self.initial_cash
-                fig.add_trace(go.Scatter(
-                    x=bm_normalized.index,
-                    y=bm_normalized.values,
-                    mode='lines',
-                    name='基准 (沪深300)',
-                    line=dict(color='#E07A5F', width=2, dash='dash'),
-                    hovertemplate='日期: %{x}<br>基准资产: ¥%{y:,.2f}<extra></extra>'
-                ))
-
-        # 更新布局
-        fig.update_layout(
-            title=dict(
-                text=title,
-                x=0.5,
-                font=dict(size=16)
-            ),
-            xaxis_title="日期",
-            yaxis_title="总资产 (¥)",
-            height=600,
-            showlegend=True,
-            template='plotly_white',
-            hovermode='x unified'
-        )
-
-        # 添加网格线
-        fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='LightGrey')
-
-        # 显示图表
-        fig.show()
-
-        # 自动保存 HTML 文件到 examples/charts/
-        try:
-            charts_dir = Path.cwd() / "examples" / "charts"
-            charts_dir.mkdir(parents=True, exist_ok=True)
-            safe_title = "".join(c for c in title if c.isalnum() or c in " _-").strip()[:50]
-            html_path = charts_dir / f"{safe_title}.html"
-            fig.write_html(str(html_path))
-            print(f"📊 图表已保存: {html_path}")
-        except Exception as e:
-            pass  # 保存失败不阻塞主流程
-
-        return fig
 
     def report(self, title: str = "未命名策略", output_path: Optional[str] = None) -> str:
         """
