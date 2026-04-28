@@ -102,7 +102,12 @@ class Broker:
         """
         # 计算买入所需金额
         required_cash = price * size
-        
+
+        # 校验买入数量
+        if size <= 0:
+            print(f"买入数量必须大于 0！当前: {size}")
+            return False
+
         # 检查资金是否足够
         if self.cash < required_cash:
             print(f"资金不足！需要 {required_cash:.2f}，当前可用 {self.cash:.2f}")
@@ -157,6 +162,11 @@ class Broker:
         Returns:
             bool: 交易是否成功
         """
+        # 校验卖出数量
+        if size <= 0:
+            print(f"卖出数量必须大于 0！当前: {size}")
+            return False
+
         # 检查是否有足够的持仓
         if symbol not in self.positions:
             print(f"没有 {symbol} 的持仓！")
@@ -209,7 +219,10 @@ class Broker:
         
         if timestamp is None or timestamp not in self.trades.index:
             return None
-            
+
+        if factor not in self.trades.columns:
+            return None
+
         return self.trades.at[timestamp, factor]
     
     

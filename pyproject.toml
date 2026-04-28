@@ -16,7 +16,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "akshare>=1.16.93",
     "fastapi>=0.115.13",
@@ -32,6 +32,10 @@ dependencies = [
     "dask[complete]>=2025.7.0",
     "ta>=0.11.0",
     "zmq>=0.0.0",
+    "baostock>=0.8.9",
+    "litellm>=1.81.14",
+    "websockets>=16.0",
+    "open-terminal>=0.10.1",
 ]
 
 [project.optional-dependencies]
@@ -55,6 +59,7 @@ Issues = "https://github.com/zsrl/qka/issues"
 [project.scripts]
 qka-zmq-server = "qka.server.zmq_server:main"
 qka = "qka.cli:main"
+qka-ws-client = "qka.server.ws_client:main"
 
 [tool.hatch.version]
 source = "vcs"

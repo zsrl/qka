@@ -110,8 +110,20 @@ class Backtest:
         
         # 添加网格线
         fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='LightGrey')
-        
+
         # 显示图表
         fig.show()
-        
+
+        # 自动保存 HTML 文件到 examples/charts/
+        try:
+            from pathlib import Path
+            charts_dir = Path.cwd() / "examples" / "charts"
+            charts_dir.mkdir(parents=True, exist_ok=True)
+            safe_title = "".join(c for c in title if c.isalnum() or c in " _-").strip()[:50]
+            html_path = charts_dir / f"{safe_title}.html"
+            fig.write_html(str(html_path))
+            print(f"📊 图表已保存: {html_path}")
+        except Exception as e:
+            pass  # 保存失败不阻塞主流程
+
         return fig
