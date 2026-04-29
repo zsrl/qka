@@ -11,6 +11,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import akshare as ak
+import baostock as bs
 import dask.dataframe as dd
 from typing import List, Dict, Optional, Callable
 from qka.utils.logger import logger
@@ -26,7 +27,7 @@ class Data():
         period (str): 数据周期，如 '1d'、'1m' 等
         adjust (str): 复权方式，如 'qfq'、'hfq'、'bfq'
         factor (Callable): 因子计算函数
-        source (str): 数据源，如 'akshare'、'qmt'
+        source (str): 数据源，如 'baostock'（默认）、'akshare'、'qmt'
         pool_size (int): 并发下载线程数
         datadir (Path): 数据缓存目录
         target_dir (Path): 目标存储目录
@@ -38,7 +39,7 @@ class Data():
         period: str = '1d',
         adjust: str = 'qfq',
         factor: Callable[[pd.DataFrame], pd.DataFrame] = lambda df: df,
-        source: str = 'akshare',
+        source: str = 'baostock',
         pool_size: int = 10,
         datadir: Optional[Path] = None
     ):
@@ -50,7 +51,7 @@ class Data():
             period: 数据周期，如 '1d'（日线）、'1m'（分钟）
             adjust: 复权方式，'qfq'（前复权）、'hfq'（后复权）、'bfq'（不复权）
             factor: 因子计算函数，接收 DataFrame 返回 DataFrame，用于扩展自定义因子
-            source: 数据来源，'akshare'（默认）或 'qmt'
+            source: 数据来源，'baostock'（默认）、'akshare'、'qmt'
             pool_size: 并发下载线程数
             datadir: 缓存根目录，默认为当前工作目录下的 datadir/
         """
@@ -90,6 +91,8 @@ class Data():
 
         if self.source == 'akshare':
             df = self._get_from_akshare(symbol)
+        elif self.source == 'baostock':
+            df = self._get_from_baostock(symbol)
         else:
             df = pd.DataFrame()
 
@@ -120,28 +123,46 @@ class Data():
 
         # 准备缓存目录
 
-        with ThreadPoolExecutor(max_workers=self.pool_size) as executor:
-            # 提交下载任务
-            futures = {
-                executor.submit(self._download, symbol): symbol
-                for symbol in self.symbols
-            }
+        # baostock 需要先登录，且其 C/S 架构不支持多线程并发
+        bs_logged_in = False
+        if self.source == 'baostock':
+            lg = bs.login()
+            if lg.error_code != '0':
+                raise RuntimeError(f"baostock 登录失败: {lg.error_msg}")
+            bs_logged_in = True
 
-            # 添加tqdm进度条
-            errors = []
-            with tqdm(total=len(self.symbols), desc="下载数据") as pbar:
-                for future in as_completed(futures):
-                    symbol = futures[future]
+        errors = []
+        try:
+            if self.source == 'baostock':
+                # baostock 串行下载（C/S 架构不支持并发）
+                for symbol in tqdm(self.symbols, desc="下载数据"):
                     try:
-                        future.result()  # 触发异常（如果有）
+                        self._download(symbol)
                     except Exception as e:
                         errors.append(f"{symbol}: {e}")
                         logger.warning(f"下载 {symbol} 失败: {e}")
-                    pbar.update(1)
-                    pbar.set_postfix_str(f"当前: {symbol}")
-
+            else:
+                # 其他数据源（akshare 等）并发下载
+                with ThreadPoolExecutor(max_workers=self.pool_size) as executor:
+                    futures = {
+                        executor.submit(self._download, symbol): symbol
+                        for symbol in self.symbols
+                    }
+                    with tqdm(total=len(self.symbols), desc="下载数据") as pbar:
+                        for future in as_completed(futures):
+                            symbol = futures[future]
+                            try:
+                                future.result()
+                            except Exception as e:
+                                errors.append(f"{symbol}: {e}")
+                                logger.warning(f"下载 {symbol} 失败: {e}")
+                            pbar.update(1)
+                            pbar.set_postfix_str(f"当前: {symbol}")
             if errors:
                 logger.warning(f"共 {len(errors)} 只股票下载失败: {errors[:3]}...")
+        finally:
+            if bs_logged_in:
+                bs.logout()
 
         dfs = []
         for symbol in self.symbols:
@@ -208,4 +229,44 @@ class Data():
 
         df = df.set_index('date')
         # 设置索引
+        return df
+
+    def _get_from_baostock(self, symbol: str) -> pd.DataFrame:
+        """
+        从 baostock 获取单个股票的数据。
+
+        Args:
+            symbol (str): 股票代码，支持带后缀如 000001.SZ 或 600000.SH
+
+        Returns:
+            pd.DataFrame: 股票数据，以 date 为索引，包含 open, high, low, close, volume, amount 列
+        """
+        # baostock 代码格式：sz.000001 / sh.600000
+        bs_code = symbol.replace('.SZ', '.sz').replace('.SH', '.sh').replace('.BJ', '.bj')
+
+        # adjustflag: 1=不复权, 2=前复权, 3=后复权
+        adjust_map = {'bfq': '1', 'qfq': '2', 'hfq': '3'}
+        adjustflag = adjust_map.get(self.adjust, '2')
+
+        rs = bs.query_history_k_data_plus(
+            bs_code,
+            "date,open,high,low,close,volume,amount",
+            start_date='1990-01-01',
+            end_date='2050-12-31',
+            frequency='d',
+            adjustflag=adjustflag,
+        )
+        df = rs.get_data()
+
+        if len(df) == 0:
+            return df
+
+        # baostock 返回的数值列是字符串，转数值类型
+        numeric_cols = ["open", "high", "low", "close", "volume", "amount"]
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.set_index("date")
         return df
