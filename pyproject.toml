@@ -35,7 +35,6 @@ dependencies = [
     "baostock>=0.8.9",
     "litellm>=1.81.14",
     "websockets>=16.0",
-    "open-terminal>=0.10.1",
 ]
 
 [project.optional-dependencies]
