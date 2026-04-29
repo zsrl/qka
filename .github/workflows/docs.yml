@@ -64,8 +64,9 @@ jobs:
         with:
           path: site
 
-  # Deployment job
+  # Deployment job — 只在 push 时部署，PR 只做构建验证
   deploy:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     needs: build
     steps:
