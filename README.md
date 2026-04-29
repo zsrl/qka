@@ -8,7 +8,7 @@
     <img src="https://img.shields.io/pypi/v/qka?color=blue" alt="PyPI">
   </a>
   <a href="https://github.com/zsrl/qka">
-    <img src="https://img.shields.io/badge/python-3.11+-blue" alt="Python">
+    <img src="https://img.shields.io/badge/python-3.10+-blue" alt="Python">
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
