@@ -114,7 +114,7 @@ class Broker:
             bool: 交易是否成功
         """
         if size <= 0:
-            print(f"买入数量必须大于 0！当前: {size}")
+            logger.warning(f"买入数量必须大于 0！当前: {size}")
             return False
 
         if price <= 0:
@@ -130,7 +130,7 @@ class Broker:
         total_cost = amount + commission
 
         if self.cash < total_cost:
-            print(f"资金不足！需要 {total_cost:.2f}（佣金 {commission:.2f}），当前可用 {self.cash:.2f}")
+            logger.debug(f"资金不足！需要 {total_cost:.2f}（佣金 {commission:.2f}），当前可用 {self.cash:.2f}")
             return False
 
         # 执行买入
@@ -173,7 +173,7 @@ class Broker:
             bool: 交易是否成功
         """
         if size <= 0:
-            print(f"卖出数量必须大于 0！当前: {size}")
+            logger.warning(f"卖出数量必须大于 0！当前: {size}")
             return False
 
         if price <= 0:
@@ -181,12 +181,12 @@ class Broker:
             return False
 
         if symbol not in self.positions:
-            print(f"没有 {symbol} 的持仓！")
+            logger.warning(f"没有 {symbol} 的持仓！")
             return False
 
         position = self.positions[symbol]
         if position['size'] < size:
-            print(f"持仓不足！当前持有 {position['size']}，尝试卖出 {size}")
+            logger.warning(f"持仓不足！当前持有 {position['size']}，尝试卖出 {size}")
             return False
 
         exec_price = price * (1 - self.slippage)
