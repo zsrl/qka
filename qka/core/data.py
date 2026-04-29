@@ -101,18 +101,22 @@ class Data():
 
         return path
 
-    def get(self) -> dd.DataFrame:
+    def get(self) -> pd.DataFrame:
         """
         获取历史数据
 
-        并发下载所有股票数据，应用因子计算，并返回合并后的Dask DataFrame。
+        并发下载所有股票数据，应用因子计算，并返回合并后的 DataFrame。
 
         Returns:
-            dd.DataFrame: 合并后的股票数据，每只股票的列名格式为 {symbol}_{column}
-                          如果没有股票，返回空的 Dask DataFrame
+            pd.DataFrame: 合并后的股票数据，每只股票的列名格式为 {symbol}_{column}
+                          没有数据时抛出 RuntimeError
         """
         if not self.symbols:
-            return dd.from_pandas(pd.DataFrame(), npartitions=1)
+            return pd.DataFrame()
+
+        # 缓存：避免重复读取
+        if hasattr(self, '_cached') and self._cached is not None:
+            return self._cached
 
         # 准备缓存目录
 
@@ -151,11 +155,15 @@ class Data():
             dfs.append(df.rename(columns=column_mapping))
 
         if not dfs:
-            return dd.from_pandas(pd.DataFrame(), npartitions=1)
+            raise RuntimeError(
+                f"所有股票数据加载失败（共 {len(self.symbols)} 只），"
+                f"请检查网络连接和股票代码是否正确"
+            )
 
         df = dd.concat(dfs, axis=1, join='outer')
 
-        return df
+        self._cached = df.compute()
+        return self._cached
 
     def _get_from_akshare(self, symbol: str) -> pd.DataFrame:
         """
