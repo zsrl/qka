@@ -252,7 +252,7 @@ class Backtest:
         Args:
             title: 策略名称（显示在报告标题中）
             output_path: 输出 HTML 文件路径。
-                         None 则自动保存在 examples/charts/ 下
+                         None 则自动保存在 reports/ 目录下
 
         Returns:
             str: HTML 文件路径
