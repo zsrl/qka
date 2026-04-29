@@ -44,14 +44,15 @@ class Data():
     ):
         """
         初始化数据对象
-        
+
         Args:
-            symbols: [维度1] 标的，如 ['000001.SZ', '600000.SH']
-            period: [维度2] 周期，如 '1m', '5m', '1d' 等
-            factor: [维度3] 因子字典，key为因子名，value为因子函数
-            source: [维度4] 数据来源 ('qmt', 'akshare')
-            pool_size: 并发池大小
-            datadir: 缓存根目录，默认为项目根目录下的 datadir
+            symbols: 股票代码列表，如 ['000001.SZ', '600000.SH']
+            period: 数据周期，如 '1d'（日线）、'1m'（分钟）
+            adjust: 复权方式，'qfq'（前复权）、'hfq'（后复权）、'bfq'（不复权）
+            factor: 因子计算函数，接收 DataFrame 返回 DataFrame，用于扩展自定义因子
+            source: 数据来源，'akshare'（默认）或 'qmt'
+            pool_size: 并发下载线程数
+            datadir: 缓存根目录，默认为当前工作目录下的 datadir/
         """
         self.symbols = symbols or []
         self.period = period
@@ -103,12 +104,16 @@ class Data():
     def get(self) -> dd.DataFrame:
         """
         获取历史数据
-        
+
         并发下载所有股票数据，应用因子计算，并返回合并后的Dask DataFrame。
-        
+
         Returns:
             dd.DataFrame: 合并后的股票数据，每只股票的列名格式为 {symbol}_{column}
+                          如果没有股票，返回空的 Dask DataFrame
         """
+        if not self.symbols:
+            return dd.from_pandas(pd.DataFrame(), npartitions=1)
+
         # 准备缓存目录
 
         with ThreadPoolExecutor(max_workers=self.pool_size) as executor:
@@ -119,18 +124,34 @@ class Data():
             }
 
             # 添加tqdm进度条
+            errors = []
             with tqdm(total=len(self.symbols), desc="下载数据") as pbar:
                 for future in as_completed(futures):
                     symbol = futures[future]
+                    try:
+                        future.result()  # 触发异常（如果有）
+                    except Exception as e:
+                        errors.append(f"{symbol}: {e}")
+                        logger.warning(f"下载 {symbol} 失败: {e}")
                     pbar.update(1)
                     pbar.set_postfix_str(f"当前: {symbol}")
 
+            if errors:
+                logger.warning(f"共 {len(errors)} 只股票下载失败: {errors[:3]}...")
+
         dfs = []
         for symbol in self.symbols:
-            df = dd.read_parquet(str(self.target_dir / f"{symbol}.parquet"))
+            parquet_path = self.target_dir / f"{symbol}.parquet"
+            if not parquet_path.exists():
+                logger.warning(f"数据文件不存在，跳过: {parquet_path}")
+                continue
+            df = dd.read_parquet(str(parquet_path))
             df = self.factor(df)
             column_mapping = {col: f'{symbol}_{col}' for col in df.columns}
             dfs.append(df.rename(columns=column_mapping))
+
+        if not dfs:
+            return dd.from_pandas(pd.DataFrame(), npartitions=1)
 
         df = dd.concat(dfs, axis=1, join='outer')
 
@@ -157,7 +178,9 @@ class Data():
         }
 
         # 下载数据
-        df = ak.stock_zh_a_hist(symbol=symbol, period='daily', adjust=self.adjust)
+        # akshare 不支持带 .SZ/.SH 后缀，需去除
+        clean_symbol = symbol.replace('.SZ', '').replace('.SH', '').replace('.BJ', '')
+        df = ak.stock_zh_a_hist(symbol=clean_symbol, period='daily', adjust=self.adjust)
 
         # 数据标准化处理
         # 1. 标准化列名

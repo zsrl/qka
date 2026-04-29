@@ -37,7 +37,7 @@ jobs:
         id: release-check
         run: |
           # Check if there are any releasable changes
-          if uv run semantic-release --noop --strict version; then
+          if uv run semantic-release version --no-op --strict; then
             echo "release_needed=true" >> $GITHUB_OUTPUT
             echo "Release will be created"
           else

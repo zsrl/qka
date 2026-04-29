@@ -171,3 +171,12 @@ cython_debug/
 uv.lock
 output
 datadir
+
+# 本地调试/临时文件
+_debug_*.py
+_temp_*.txt
+_momentum_output.txt
+
+# 示例和测试（不入库）
+examples/
+tests/
