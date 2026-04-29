@@ -61,8 +61,8 @@ df = data.get()
 class MyStrategy(qka.Strategy):
     def on_bar(self, date, get):
         close = get('close')
-        # 价格低于10元买入1000股
-        if '000001.SZ' in close and close['000001.SZ'] < 10:
+        # 价格低于10元买入1000股（注意前复权可能导致早期价格为负）
+        if '000001.SZ' in close and 0 < close['000001.SZ'] < 10:
             self.broker.buy('000001.SZ', close['000001.SZ'], 1000)
 ```
 

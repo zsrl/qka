@@ -7,6 +7,7 @@ QKA经纪商模块
 
 import pandas as pd
 from typing import Any
+from qka.utils.logger import logger
 
 # A 股默认费率
 DEFAULT_COMMISSION_RATE = 0.00025   # 万2.5 佣金
@@ -116,6 +117,10 @@ class Broker:
             print(f"买入数量必须大于 0！当前: {size}")
             return False
 
+        if price <= 0:
+            logger.warning(f"价格 {price:.2f} 不合法（前复权可能导致早期价格为负），跳过买入 {symbol}")
+            return False
+
         exec_price = price * (1 + self.slippage)
         amount = exec_price * size
         if self.commission_rate > 0:
@@ -150,7 +155,7 @@ class Broker:
             'timestamp': self.timestamp,
         })
 
-        print(f"买入成功: {symbol} {size}股 @ {exec_price:.2f}，花费 {total_cost:.2f}（佣金 {commission:.2f}）")
+        logger.debug(f"买入成功: {symbol} {size}股 @ {exec_price:.2f}，花费 {total_cost:.2f}（佣金 {commission:.2f}）")
         return True
 
     def sell(self, symbol: str, price: float, size: int) -> bool:
@@ -169,6 +174,10 @@ class Broker:
         """
         if size <= 0:
             print(f"卖出数量必须大于 0！当前: {size}")
+            return False
+
+        if price <= 0:
+            logger.warning(f"价格 {price:.2f} 不合法，跳过卖出 {symbol}")
             return False
 
         if symbol not in self.positions:
@@ -210,7 +219,7 @@ class Broker:
             'timestamp': self.timestamp,
         })
 
-        print(f"卖出成功: {symbol} {size}股 @ {exec_price:.2f}，获得 {net_proceeds:.2f}（佣金 {commission:.2f} + 印花税 {stamp_duty:.2f}）")
+        logger.debug(f"卖出成功: {symbol} {size}股 @ {exec_price:.2f}，获得 {net_proceeds:.2f}（佣金 {commission:.2f} + 印花税 {stamp_duty:.2f}）")
         return True
 
     def get(self, factor: str, timestamp=None) -> Any:
