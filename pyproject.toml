@@ -16,7 +16,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "akshare>=1.16.93",
     "fastapi>=0.115.13",
@@ -29,7 +29,7 @@ dependencies = [
     "ipykernel>=6.29.5",
     "pyarrow>=21.0.0",
     "tqdm>=4.67.1",
-    "dask[complete]>=2025.7.0",
+    "dask[dataframe]>=2025.7.0",
     "ta>=0.11.0",
     "zmq>=0.0.0",
     "baostock>=0.8.9",

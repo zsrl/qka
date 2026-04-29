@@ -1,7 +1,7 @@
 site_name: QKA - 快量化文档
 site_description: 快捷量化助手（Quick Quantitative Assistant）- 简洁易用的A股量化交易框架
 site_author: QKA Team
-site_url: https://zsrl.github.io/qka
+site_url: https://qka.quantai.chat
 
 # Repository
 repo_name: zsrl/qka
