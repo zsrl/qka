@@ -6,7 +6,9 @@
 
 import pandas as pd
 import numpy as np
-from typing import Optional
+import dask.dataframe as dd
+from typing import Optional, Union
+from collections import defaultdict
 
 
 class Backtest:
@@ -37,12 +39,38 @@ class Backtest:
         self.initial_cash = strategy.broker.cash
         self._benchmark_data = None
 
+    @staticmethod
+    def _parse_row(row):
+        """
+        解析一行 iterrows 数据为 per-factor 字典。
+
+        列名格式: {symbol}_{factor}
+        例: '000001.SZ_close' → factor='close', symbol='000001.SZ'
+
+        Args:
+            row: pd.Series，列名格式 {symbol}_{factor}
+
+        Returns:
+            dict: {factor: {symbol: value}}
+        """
+        by_factor = defaultdict(dict)
+        for col, val in row.items():
+            if not isinstance(col, str) or '_' not in col:
+                continue
+            *sym_parts, factor = col.rsplit('_', 1)
+            symbol = '_'.join(sym_parts)
+            by_factor[factor][symbol] = val
+        return dict(by_factor)
+
     def run(self, benchmark: Optional[str] = None):
         """
         执行回测
 
         遍历所有时间点，在每个时间点调用策略的on_bar方法进行交易决策，
         并记录交易后的状态。
+
+        大规模回测（>500 bar）时自动使用分区迭代，分块加载数据到内存，
+        避免一次性加载全量数据。
 
         Args:
             benchmark (str, optional): 基准代码，如 '000300.SH'（沪深300）。
@@ -52,33 +80,64 @@ class Backtest:
             None。回测结果保存在 self.results 中，可通过
             self.summary() 查看绩效指标，self.report() 生成报告。
         """
-        # 获取所有股票数据（dask DataFrame）
-        df = self.data.get()
+        # 获取数据（优先用 lazy 模式，由 Backtest 决定是否分区）
+        raw = self.data.get(lazy=True)
 
         # 加载基准数据
         if benchmark:
             self._load_benchmark(benchmark)
 
-        for date, row in df.iterrows():
-            def get(factor):
-                """
-                获取指定因子的数据
+        if isinstance(raw, dd.DataFrame):
+            # ── dask 模式：分区迭代 ──
+            ddf: dd.DataFrame = raw
+            n_rows = len(ddf)
 
-                Args:
-                    factor (str): 因子名称，如 'close', 'volume' 等
+            if n_rows > 500:
+                # 大规模：先算 index，再按日期分块读取
+                index = ddf.index.compute()
+                chunk_size = 500
 
-                Returns:
-                    pd.Series: 该因子的所有股票数据，index为股票代码
-                """
-                s = row[row.index.str.endswith(factor)]
-                s.index = s.index.str.replace(f'_{factor}$', '', regex=True)
-                return s
+                for start in range(0, n_rows, chunk_size):
+                    end = min(start + chunk_size, n_rows)
+                    date_start, date_end = index[start], index[end - 1]
 
-            # 调用策略的on_bar方法
-            self.strategy.on_bar(date, get)
+                    chunk = ddf.loc[date_start:date_end].compute()
+                    for dt, row in chunk.iterrows():
+                        by_factor = self._parse_row(row)
+                        for factor, data in by_factor.items():
+                            self.strategy._data.push(dt, factor, data)
+                        # 向后兼容：同时支持新 API (self.get) 和旧 API (get 闭包)
+                        self.strategy.on_bar(dt, self.strategy._data.get)
+                        self.strategy.broker.on_bar(
+                            dt, self.strategy._data.get
+                        )
+            else:
+                # 小规模：一次加载，零开销
+                df = ddf.compute()
+                for date, row in df.iterrows():
+                    by_factor = self._parse_row(row)
+                    for factor, data in by_factor.items():
+                        self.strategy._data.push(date, factor, data)
+                    self.strategy.on_bar(date, self.strategy._data.get)
+                    self.strategy.broker.on_bar(
+                        date, self.strategy._data.get
+                    )
+        else:
+            # ── pandas 模式：向后兼容（测试 mock 数据等） ──
+            df: pd.DataFrame = raw
+            for date, row in df.iterrows():
+                # 解析并推入 DataAccessor（支持新 API: self.get / self.history）
+                by_factor = self._parse_row(row)
+                for factor, data in by_factor.items():
+                    self.strategy._data.push(date, factor, data)
 
-            # 记录Bar结束后的状态
-            self.strategy.broker.on_bar(date, get)
+                def get(factor):
+                    s = row[row.index.str.endswith(factor)]
+                    s.index = s.index.str.replace(f'_{factor}$', '', regex=True)
+                    return s
+
+                self.strategy.on_bar(date, get)
+                self.strategy.broker.on_bar(date, get)
 
         # 保存回测结果
         self.results = self.strategy.broker.trades
