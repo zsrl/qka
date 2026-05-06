@@ -55,6 +55,9 @@ class BuyAndHold(Strategy):
 |------|------|------|
 | `self.get('close')` | 当前 bar 所有股票收盘价 | `pd.Series`（index=股票代码） |
 | `self.history('close', 20)` | 过去 N 日收盘价历史 | `pd.DataFrame`（行=日期，列=股票代码） |
+| `self.ta.sma('close', 20)` | 简单移动平均线 | `pd.Series` |
+| `self.ta.rsi('close', 14)` | 相对强弱指标 | `pd.Series` |
+| `self.ta.macd('close')` | MACD 三线 | `pd.DataFrame` |
 
 !!! tip "不再是闭包"
     与旧版本不同，`on_bar` 不再接收 `get` 参数。所有数据通过 `self.get()` 和 `self.history()` 访问，代码更简洁一致。
@@ -190,6 +193,56 @@ class MaCross(Strategy):
                 if sym in self.broker.positions:
                     self.broker.sell(sym, price, self.broker.positions[sym]['size'])
                 self.bought = False
+```
+
+## 进阶 2：用 `self.ta` 调用技术指标
+
+`self.ta` 提供了内置技术指标，基于 `ta` 库，一行代码即可计算：
+
+```python
+from qka import Strategy, Broker
+
+class RsiStrategy(Strategy):
+    """RSI 超卖买入，超买卖出"""
+    def __init__(self):
+        super().__init__()
+        self.broker = Broker(initial_cash=100_000)
+
+    def on_bar(self, date):
+        close = self.get('close')
+        if close is None or close.empty:
+            return
+
+        # 一行计算 RSI
+        rsi = self.ta.rsi('close', length=14)
+
+        for sym in close.index:
+            if sym not in rsi.index:
+                continue
+            price = float(close[sym])
+            if price <= 0:
+                continue
+
+            if rsi[sym] < 30 and sym not in self.broker.positions:
+                # RSI 低于 30，超卖，买入
+                self.broker.buy(sym, price, 100)
+            elif rsi[sym] > 70 and sym in self.broker.positions:
+                # RSI 高于 70，超买，卖出
+                pos = self.broker.positions[sym]
+                self.broker.sell(sym, price, pos['size'])
+```
+
+所有支持的指标：
+
+| 方法 | 说明 | 返回 |
+|------|------|------|
+| `self.ta.sma(factor, length)` | 简单移动平均 | `pd.Series` |
+| `self.ta.ema(factor, length)` | 指数移动平均 | `pd.Series` |
+| `self.ta.rsi(factor, length)` | 相对强弱指标 | `pd.Series` |
+| `self.ta.atr(high, low, close, length)` | 平均真实波幅 | `pd.Series` |
+| `self.ta.macd(factor, fast, slow, signal)` | MACD 三线 | `pd.DataFrame` |
+| `self.ta.bbands(factor, length, std)` | 布林带三轨 | `pd.DataFrame` |
+| `self.ta.custom(factor, func, ...)` | 自定义指标 | `pd.Series` |
 ```
 
 ---

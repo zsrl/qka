@@ -37,6 +37,17 @@
 
 ---
 
+## `qka.TAAccessor`
+
+::: qka.core.indicators.TAAccessor
+    options:
+      show_root_heading: false
+      show_source: true
+      members_order: source
+      heading_level: 3
+
+---
+
 ## `qka.Broker`
 
 ::: qka.core.broker.Broker
