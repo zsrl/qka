@@ -106,8 +106,8 @@ class Backtest:
                         by_factor = self._parse_row(row)
                         for factor, data in by_factor.items():
                             self.strategy._data.push(dt, factor, data)
-                        # 向后兼容：同时支持新 API (self.get) 和旧 API (get 闭包)
-                        self.strategy.on_bar(dt, self.strategy._data.get)
+                        # dask 路径：策略使用 self.get() / self.history()
+                        self.strategy.on_bar(dt)
                         self.strategy.broker.on_bar(
                             dt, self.strategy._data.get
                         )
@@ -118,7 +118,7 @@ class Backtest:
                     by_factor = self._parse_row(row)
                     for factor, data in by_factor.items():
                         self.strategy._data.push(date, factor, data)
-                    self.strategy.on_bar(date, self.strategy._data.get)
+                    self.strategy.on_bar(date)
                     self.strategy.broker.on_bar(
                         date, self.strategy._data.get
                     )
@@ -126,18 +126,13 @@ class Backtest:
             # ── pandas 模式：向后兼容（测试 mock 数据等） ──
             df: pd.DataFrame = raw
             for date, row in df.iterrows():
-                # 解析并推入 DataAccessor（支持新 API: self.get / self.history）
                 by_factor = self._parse_row(row)
                 for factor, data in by_factor.items():
                     self.strategy._data.push(date, factor, data)
-
-                def get(factor):
-                    s = row[row.index.str.endswith(factor)]
-                    s.index = s.index.str.replace(f'_{factor}$', '', regex=True)
-                    return s
-
-                self.strategy.on_bar(date, get)
-                self.strategy.broker.on_bar(date, get)
+                self.strategy.on_bar(date)
+                self.strategy.broker.on_bar(
+                    date, self.strategy._data.get
+                )
 
         # 保存回测结果
         self.results = self.strategy.broker.trades

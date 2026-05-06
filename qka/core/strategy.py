@@ -59,16 +59,13 @@ class Strategy(ABC):
         return self._data.history(factor, window)
 
     @abstractmethod
-    def on_bar(self, date, get=None):
+    def on_bar(self, date):
         """
         每个 bar 的处理逻辑，必须由子类实现。
 
-        两种使用方式：
-        1. 新方式：忽略 get 参数，使用 self.get() / self.history()
-        2. 旧方式（向后兼容）：使用 get(factor) 闭包
+        使用 self.get(factor) / self.history(factor, window) 获取数据。
 
         Args:
             date: 当前日期
-            get: （可选）获取因子数据的函数，格式为 get(factor_name) -> pd.Series
         """
         pass
