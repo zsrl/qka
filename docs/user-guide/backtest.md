@@ -7,18 +7,17 @@
 ## 基本用法
 
 ```python
-from qka.core.data import Data
-from qka.core.strategy import Strategy
-from qka.core.broker import Broker
-from qka.core.backtest import Backtest
+from qka import Data, Strategy, Broker, Backtest
 
 class MyStrategy(Strategy):
     def __init__(self):
-        super().__init__(cash=1_000_000)
+        super().__init__()
         self.broker = Broker(initial_cash=1_000_000)
 
-    def on_bar(self, date, get):
-        close = get('close')
+    def on_bar(self, date):
+        close = self.get('close')
+        if close is None or close.empty:
+            return
         # 你的交易逻辑
 
 data = Data(symbols=['000001.SZ', '600000.SH'])
@@ -41,7 +40,7 @@ bt.run()
 ### 自定义费率
 
 ```python
-from qka.core.broker import Broker
+from qka import Broker
 
 self.broker = Broker(
     initial_cash=1_000_000,
@@ -128,7 +127,7 @@ metrics = bt.summary()
 
 ```python
 bt.report()
-# 自动保存到 examples/charts/ 下
+# 自动保存到 reports/ 目录
 ```
 
 ### 自定义标题和路径
@@ -162,59 +161,67 @@ bt.report(
 
 ---
 
-## 完整示例
+## 完整示例：5 日动量策略
+
+以下是使用 `self.history()` 实现的 5 日动量策略——选过去 5 天涨幅最大的 2 只等权买入。
 
 ```python
-from qka.core.data import Data
-from qka.core.strategy import Strategy
-from qka.core.broker import Broker
-from qka.core.backtest import Backtest
+from qka import Data, Strategy, Broker, Backtest
 import numpy as np
 
 class MomentumStrategy(Strategy):
-    """5日动量策略：选过去5天涨幅最大的2只股票等权买入"""
+    """5日动量策略"""
     def __init__(self):
-        super().__init__(cash=1_000_000)
+        super().__init__()
         self.broker = Broker(initial_cash=1_000_000)
-        self.prices = {}
         self.holding = set()
 
-    def on_bar(self, date, get):
-        close = get('close')
-        if close.empty:
-            return
-        for sym in close.index:
-            p = float(close[sym])
-            if p > 0:
-                self.prices.setdefault(sym, []).append(p)
-        if any(len(v) < 5 for v in self.prices.values()):
-            return
-        momentum = {}
-        for sym in close.index:
-            if sym in self.prices and len(self.prices[sym]) >= 5:
-                ret = self.prices[sym][-1] / self.prices[sym][-5] - 1
-                if not np.isnan(ret):
-                    momentum[sym] = ret
+    def on_bar(self, date):
+        # 获取过去 5 天收盘价
+        hist = self.history('close', 5)
+        if len(hist) < 5:
+            return   # 数据不足
+
+        # 计算每只股票的 5 日涨幅
+        first = hist.iloc[0]    # 5 日前
+        last  = hist.iloc[-1]   # 今日
+        valid = (first > 0) & (last > 0)
+        momentum = pd.Series(index=hist.columns, dtype=float)
+        momentum[valid] = last[valid] / first[valid] - 1
+        momentum = momentum.dropna()
+
         if len(momentum) < 2:
             return
-        targets = set(sorted(momentum, key=momentum.get, reverse=True)[:2])
+
+        # 动量最强的 2 只
+        targets = set(momentum.nlargest(2).index)
+
+        # 卖出不在选股池的持仓
         for sym in list(self.holding):
-            if sym not in targets and sym in self.broker.positions:
-                price = float(close.get(sym, 0))
-                if np.isnan(price) or price <= 0:
-                    continue
+            close = self.get('close')
+            if close is None or sym not in close.index or sym in targets:
+                continue
+            price = float(close[sym])
+            if price > 0 and sym in self.broker.positions:
                 self.broker.sell(sym, price, self.broker.positions[sym]['size'])
                 self.holding.discard(sym)
+
+        # 买入选中股票
         for sym in targets:
-            if sym not in self.holding:
-                price = float(close[sym])
-                if np.isnan(price) or price <= 0:
-                    continue
-                cash_per = self.broker.cash * 0.48 / price
-                size = int(cash_per // 100) * 100
-                if size > 0:
-                    self.broker.buy(sym, price, size)
-                    self.holding.add(sym)
+            if sym in self.holding:
+                continue
+            close = self.get('close')
+            if close is None or sym not in close.index:
+                continue
+            price = float(close[sym])
+            if price <= 0:
+                continue
+            cash_per = self.broker.cash * 0.48 / price
+            size = int(cash_per // 100) * 100
+            if size > 0:
+                self.broker.buy(sym, price, size)
+                self.holding.add(sym)
+
 
 # 运行
 data = Data(symbols=['000001.SZ', '000002.SZ', '600000.SH'])
@@ -223,3 +230,36 @@ bt.run(benchmark='000300.SH')
 bt.summary()
 bt.report(title='5日动量策略')
 ```
+
+---
+
+## 大规模回测（300+ 只股票）
+
+QKA 内置 **dask 分区迭代引擎**，可高效处理数百只股票数年数据：
+
+```python
+from qka import Data, Strategy, Backtest
+
+# 甚至 300 只也行
+symbols = ['000001.SZ', '600000.SH', ...]  # 300 只
+data = Data(symbols=symbols, source='baostock')
+
+class MyStrategy(Strategy):
+    def on_bar(self, date):
+        close = self.get('close')
+        if close is None or close.empty:
+            return
+        # ... 你的逻辑不会因股票数量增加而变慢
+
+bt = Backtest(data, MyStrategy())
+bt.run()        # 自动使用 dask 分区迭代
+```
+
+底层原理是：
+
+1. dask 按时间将数据切分为约 500 bar/分区
+2. 逐分区 compute() 到内存
+3. DataAccessor 跨分区缓存历史数据
+4. 内存峰值 = 单分区 + 滚动窗口，与总数据量无关
+
+详见 [性能优化](../advanced/performance.md)。

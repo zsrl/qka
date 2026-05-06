@@ -620,10 +620,10 @@ def generate_report(
 
     # ---- 保存 ----
     if output_path is None:
-        charts_dir = Path.cwd() / "examples" / "charts"
-        charts_dir.mkdir(parents=True, exist_ok=True)
+        reports_dir = Path.cwd() / "reports"
+        reports_dir.mkdir(parents=True, exist_ok=True)
         safe_name = "".join(c for c in strategy_name if c.isalnum() or c in " _-").strip()[:40]
-        output_path = str(charts_dir / f"回测报告_{safe_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html")
+        output_path = str(reports_dir / f"回测报告_{safe_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html")
 
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html)

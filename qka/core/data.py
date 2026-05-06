@@ -104,24 +104,31 @@ class Data():
 
         return path
 
-    def get(self) -> pd.DataFrame:
+    def get(self, lazy: bool = False):
         """
-        获取历史数据
+        获取历史数据。
 
-        并发下载所有股票数据，应用因子计算，并返回合并后的 DataFrame。
+        并发下载所有股票数据，应用因子计算，并返回合并后的数据。
+
+        Args:
+            lazy: 是否以懒加载模式返回 dask DataFrame（支持大规模数据分区迭代）。
+                  默认 False，返回 compute() 后的 pandas DataFrame（向后兼容）。
 
         Returns:
-            pd.DataFrame: 合并后的股票数据，每只股票的列名格式为 {symbol}_{column}
-                          没有数据时抛出 RuntimeError
+            lazy=False: pd.DataFrame，列名格式 {symbol}_{factor}
+            lazy=True: dd.DataFrame，列名格式 {symbol}_{factor}
+            没有数据时抛出 RuntimeError
         """
         if not self.symbols:
             return pd.DataFrame()
 
-        # 缓存：避免重复读取
-        if hasattr(self, '_cached') and self._cached is not None:
-            return self._cached
-
-        # 准备缓存目录
+        # 缓存
+        if lazy:
+            if hasattr(self, '_cached_dask') and self._cached_dask is not None:
+                return self._cached_dask
+        else:
+            if hasattr(self, '_cached') and self._cached is not None:
+                return self._cached
 
         # baostock 需要先登录，且其 C/S 架构不支持多线程并发
         bs_logged_in = False
@@ -164,27 +171,51 @@ class Data():
             if bs_logged_in:
                 bs.logout()
 
-        dfs = []
-        for symbol in self.symbols:
-            parquet_path = self.target_dir / f"{symbol}.parquet"
-            if not parquet_path.exists():
-                logger.warning(f"数据文件不存在，跳过: {parquet_path}")
-                continue
-            df = dd.read_parquet(str(parquet_path))
-            df = self.factor(df)
-            column_mapping = {col: f'{symbol}_{col}' for col in df.columns}
-            dfs.append(df.rename(columns=column_mapping))
+        if lazy:
+            # 懒加载模式：返回 dask DataFrame，列名 {symbol}_{factor}
+            dfs = []
+            for symbol in self.symbols:
+                parquet_path = self.target_dir / f"{symbol}.parquet"
+                if not parquet_path.exists():
+                    logger.warning(f"数据文件不存在，跳过: {parquet_path}")
+                    continue
+                ddf = dd.read_parquet(str(parquet_path))
+                ddf = self.factor(ddf)
+                column_mapping = {col: f'{symbol}_{col}' for col in ddf.columns}
+                dfs.append(ddf.rename(columns=column_mapping))
 
-        if not dfs:
-            raise RuntimeError(
-                f"所有股票数据加载失败（共 {len(self.symbols)} 只），"
-                f"请检查网络连接和股票代码是否正确"
-            )
+            if not dfs:
+                raise RuntimeError(
+                    f"所有股票数据加载失败（共 {len(self.symbols)} 只），"
+                    f"请检查网络连接和股票代码是否正确"
+                )
 
-        df = dd.concat(dfs, axis=1, join='outer')
+            ddf = dd.concat(dfs, axis=1, join='outer')
+            self._cached_dask = ddf
+            return ddf
 
-        self._cached = df.compute()
-        return self._cached
+        else:
+            # 全量模式（默认）：与之前一致，向后兼容
+            dfs = []
+            for symbol in self.symbols:
+                parquet_path = self.target_dir / f"{symbol}.parquet"
+                if not parquet_path.exists():
+                    logger.warning(f"数据文件不存在，跳过: {parquet_path}")
+                    continue
+                df = dd.read_parquet(str(parquet_path))
+                df = self.factor(df)
+                column_mapping = {col: f'{symbol}_{col}' for col in df.columns}
+                dfs.append(df.rename(columns=column_mapping))
+
+            if not dfs:
+                raise RuntimeError(
+                    f"所有股票数据加载失败（共 {len(self.symbols)} 只），"
+                    f"请检查网络连接和股票代码是否正确"
+                )
+
+            ddf = dd.concat(dfs, axis=1, join='outer')
+            self._cached = ddf.compute()
+            return self._cached
 
     def _get_from_akshare(self, symbol: str) -> pd.DataFrame:
         """

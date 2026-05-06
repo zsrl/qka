@@ -180,3 +180,6 @@ _momentum_output.txt
 # 示例和测试（不入库）
 examples/
 tests/
+
+# 回测报告
+reports/
