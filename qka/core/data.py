@@ -116,7 +116,7 @@ class Data():
 
         Returns:
             lazy=False: pd.DataFrame，列名格式 {symbol}_{factor}
-            lazy=True: dd.DataFrame，列为 MultiIndex (symbol, factor)
+            lazy=True: dd.DataFrame，列名格式 {symbol}_{factor}
             没有数据时抛出 RuntimeError
         """
         if not self.symbols:

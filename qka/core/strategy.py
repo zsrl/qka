@@ -65,7 +65,20 @@ class Strategy(ABC):
 
         使用 self.get(factor) / self.history(factor, window) 获取数据。
 
+        --- 用法 ---
+
+        class MyStrategy(Strategy):
+            def on_bar(self, date):
+                # 横截面数据（当前 bar 所有股票）
+                close = self.get('close')
+
+                # 历史序列（过去 N 天）
+                hist = self.history('close', 20)
+
+                # 交易操作
+                if not close.empty and '000001.SZ' in close.index:
+                    self.broker.buy('000001.SZ', float(close['000001.SZ']), 100)
+
         Args:
-            date: 当前日期
+            date: 当前日期（pd.Timestamp）
         """
-        pass

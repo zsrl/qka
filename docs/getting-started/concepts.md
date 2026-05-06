@@ -10,8 +10,9 @@
 qka/
 ├── core/               ← 核心模块
 │   ├── data.py         # 数据获取与缓存
-│   ├── backtest.py     # 回测引擎
+│   ├── backtest.py     # 回测引擎（含 dask 分区迭代）
 │   ├── strategy.py     # 策略基类
+│   ├── accessor.py     # 滚动窗口数据访问器（DataAccessor）
 │   ├── broker.py       # 虚拟经纪商（交易执行 + 费用计算）
 │   └── report.py       # HTML 报告生成
 ├── brokers/            # QMT 实盘对接
@@ -26,43 +27,75 @@ qka/
 ## 核心流程
 
 ```
-Data ──> Strategy.on_bar(date, get) ──> Broker.buy/sell() ──> Backtest.run()
-                                                                    │
-                                                                    v
-                                                              summary()
-                                                              report()
+Data ──> Backtest.run() ──> dask 分区迭代 ──> Strategy.on_bar(date) ──> Broker.buy/sell()
+                    │                                                         │
+                    v                                                         v
+               summary() / report()                              DataAccessor (self.get / self.history)
 ```
 
 **流程说明：**
 
-1. **`Data`** 从 akshare 下载数据并缓存，返回多只股票的 DataFrame
-2. **`Backtest`** 按日期遍历数据，每天调用策略的 `on_bar`
-3. **`Strategy.on_bar(date, get)`** 用 `get('close')` 获取当日行情，决定买卖
-4. **`Broker.buy/sell()`** 执行交易，自动扣费（佣金 + 印花税 + 滑点）
-5. **`Backtest`** 记录每天的资金、持仓状态
+1. **`Data`** 从 baostock 下载并缓存数据（每只股票独立 parquet）
+2. **`Backtest`** 用 dask 合并为 lazy DataFrame，按时间分区分批计算
+3. 每个分区 compute() 后，逐 bar 调用 `strategy.on_bar(date)`
+4. **`Strategy.on_bar(date)`** 用 `self.get('close')` / `self.history('close', 20)` 获取数据
+5. **`Broker.buy/sell()`** 执行交易，自动扣费（佣金 + 印花税 + 滑点）
 6. 回测结束后，**`summary()`** 和 **`report()`** 输出结果
 
 ---
 
 ## 关键抽象
 
-### `get(factor)` — 获取因子数据
+### `DataAccessor` — 滚动窗口数据访问器
 
-这是 `on_bar` 中最重要的接口。它在**每个 bar** 被调用，返回**当前时间点**所有股票的某个因子值：
+DataAccessor 是策略访问数据的中枢。它在回测过程中维护一个滚动窗口缓存：
 
-```python
-def on_bar(self, date, get):
-    close = get('close')       # pd.Series, index=股票代码
-    ma5  = get('ma5')          # 自定义因子，同上格式
-    # 返回值示例：
-    # 000001.SZ    10.50
-    # 600000.SH     8.32
-    # 000002.SZ    15.68
+```
+                        push(date, 'close', {symbol: value})
+                                   │
+                                   ▼
+           ┌─────────────────────────────────────┐
+           │      DataAccessor 内部缓存            │
+           │                                      │
+           │   close: {                            │
+           │     '000001.SZ': deque(maxlen=250),   │
+           │     '600000.SH': deque(maxlen=250),   │
+           │     ...                               │
+           │   }                                   │
+           │   volume: { ... }                     │
+           └─────────────────────────────────────┘
+                    │               │
+                    ▼               ▼
+            self.get()        self.history()
+            (横截面)          (时间序列)
 ```
 
-!!! note "不是历史序列"
-    `get('close')` 返回的是**当天所有股票的收盘价**，不是某只股票的历史价格。
-    要算均线等需要历史的指标，需要在策略中用列表自己累积。
+#### `self.get(factor)` — 横截面数据
+
+返回**当前 bar** 所有股票的某个因子值：
+
+```python
+close = self.get('close')
+# pd.Series:
+# 000001.SZ    10.50
+# 600000.SH     8.32
+# 000002.SZ    15.68
+```
+
+#### `self.history(factor, window)` — 历史序列
+
+返回过去 N 个交易日的历史数据：
+
+```python
+hist = self.history('close', 20)
+# pd.DataFrame，行=日期，列=股票代码：
+#              000001.SZ  600000.SH  000002.SZ
+# 2024-01-02      10.2       8.12      15.21
+# 2024-01-03      10.5       8.32      15.68
+# ...              ...        ...        ...
+```
+
+---
 
 ### `Broker` — 虚拟经纪商
 
@@ -85,19 +118,33 @@ self.broker = Broker(
 )
 ```
 
+---
+
 ### `Backtest` 三件套
 
 | 方法 | 功能 |
 |------|------|
 | `run(benchmark=None)` | 执行回测，可选基准对比 |
 | `summary()` | 打印绩效指标，返回 dict |
-| `report(title='', output_path=None)` | 生成 HTML 报告 |
+| `report(title='', output_path=None)` | 生成自包含 HTML 报告 |
 
 ---
 
-## 数据模型
+## 数据存储模型
 
-每只股票的数据存储为 `{symbol}_{field}` 格式的列：
+每只股票的数据独立存储为 parquet 文件：
+
+```
+datadir/
+└── baostock/
+    └── 1d/
+        └── qfq/
+            ├── 000001.SZ.parquet
+            ├── 600000.SH.parquet
+            └── ...
+```
+
+回测时，dask 将所有 parquet 合并为 lazy DataFrame。列名格式为 `{symbol}_{factor}`：
 
 | 列名 | 含义 |
 |------|------|
@@ -105,7 +152,18 @@ self.broker = Broker(
 | `000001.SZ_volume` | 平安银行成交量 |
 | `600000.SH_close` | 浦发银行收盘价 |
 
-自定义因子通过 `.map_partitions()` 挂载后，`get()` 同样可以获取。
+---
+
+## 性能原理
+
+QKA 的回测引擎使用 **dask 分区迭代** 处理大规模数据：
+
+- **每只股票独立存储** → 增量下载天然支持
+- **dask 合并** → 仅保存计算图，不加载到内存
+- **按时间分区** → 每个分区约 500 bar，逐批 compute()
+- **DataAccessor 跨分区** → deque 缓存延续历史数据
+
+这种设计让 QKA 可以高效处理数百只股票数年数据，同时保持单机运行。详见 [性能优化](../advanced/performance.md)。
 
 ---
 

@@ -126,6 +126,8 @@ nav:
     - 数据获取: user-guide/data.md
     - 回测分析: user-guide/backtest.md
     - 实盘交易: user-guide/trading.md
+  - 进阶:
+    - 性能优化: advanced/performance.md
   - API参考:
     - 核心模块: api/core.md
     - 交易模块: api/brokers.md
