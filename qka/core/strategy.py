@@ -7,7 +7,6 @@ QKA策略模块
 from abc import ABC, abstractmethod
 from qka.core.broker import Broker
 from qka.core.accessor import DataAccessor
-from qka.core.indicators import TAAccessor
 
 
 class Strategy(ABC):
@@ -18,7 +17,6 @@ class Strategy(ABC):
 
     Attributes:
         broker (Broker): 交易经纪商实例，用于执行交易操作
-        ta (TAAccessor): 技术指标访问器，通过 self.ta.sma() / self.ta.rsi() 等计算指标
         _data (DataAccessor): 数据访问器，提供 self.get() 和 self.history() 接口
     """
 
@@ -31,7 +29,6 @@ class Strategy(ABC):
         """
         self.broker = Broker(initial_cash=cash)
         self._data = DataAccessor(max_window=750)
-        self.ta = TAAccessor(self._data)
 
     def get(self, factor: str):
         """

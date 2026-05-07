@@ -55,12 +55,16 @@ class BuyAndHold(Strategy):
 |------|------|------|
 | `self.get('close')` | 当前 bar 所有股票收盘价 | `pd.Series`（index=股票代码） |
 | `self.history('close', 20)` | 过去 N 日收盘价历史 | `pd.DataFrame`（行=日期，列=股票代码） |
-| `self.ta.sma('close', 20)` | 简单移动平均线 | `pd.Series` |
-| `self.ta.rsi('close', 14)` | 相对强弱指标 | `pd.Series` |
-| `self.ta.macd('close')` | MACD 三线 | `pd.DataFrame` |
+| `self.get('sma_20')` | 预计算的 20 日均线 | `pd.Series` |
+| `self.history('sma_20', 10)` | 过去 10 日 SMA 历史 | `pd.DataFrame` |
 
 !!! tip "不再是闭包"
     与旧版本不同，`on_bar` 不再接收 `get` 参数。所有数据通过 `self.get()` 和 `self.history()` 访问，代码更简洁一致。
+
+!!! tip "技术指标预计算"
+    技术指标在 `Data` 层通过 `indicators=...` 预计算，作为额外的列加载。
+    策略中直接用 `self.get('sma_20')` 获取，无需每 bar 动态计算。
+    详见 [核心概念 - 预计算技术指标](concepts.md)。
 
 ---
 
@@ -195,12 +199,12 @@ class MaCross(Strategy):
                 self.bought = False
 ```
 
-## 进阶 2：用 `self.ta` 调用技术指标
+## 进阶 2：用预计算指标实现 RSI 策略
 
-`self.ta` 提供了内置技术指标，基于 `ta` 库，一行代码即可计算：
+在 `Data` 中声明需要预计算的指标，策略中直接使用：
 
 ```python
-from qka import Strategy, Broker
+from qka import Data, Strategy, Broker, Backtest
 
 class RsiStrategy(Strategy):
     """RSI 超卖买入，超买卖出"""
@@ -210,11 +214,9 @@ class RsiStrategy(Strategy):
 
     def on_bar(self, date):
         close = self.get('close')
-        if close is None or close.empty:
+        rsi = self.get('rsi_14')
+        if close is None or close.empty or rsi is None or rsi.empty:
             return
-
-        # 一行计算 RSI
-        rsi = self.ta.rsi('close', length=14)
 
         for sym in close.index:
             if sym not in rsi.index:
@@ -230,19 +232,32 @@ class RsiStrategy(Strategy):
                 # RSI 高于 70，超买，卖出
                 pos = self.broker.positions[sym]
                 self.broker.sell(sym, price, pos['size'])
+
+# 在 Data 中声明指标
+data = Data(
+    symbols=['000001.SZ', '600000.SH'],
+    indicators={
+        'rsi_14': ('rsi', 14),        # 预计算 14 日 RSI
+        'sma_20': ('sma', 20),         # 同时预计算 20 日均线
+    },
+)
+bt = Backtest(data, RsiStrategy())
+bt.run()
+bt.summary()
 ```
 
-所有支持的指标：
+支持的所有预计算指标：
 
-| 方法 | 说明 | 返回 |
-|------|------|------|
-| `self.ta.sma(factor, length)` | 简单移动平均 | `pd.Series` |
-| `self.ta.ema(factor, length)` | 指数移动平均 | `pd.Series` |
-| `self.ta.rsi(factor, length)` | 相对强弱指标 | `pd.Series` |
-| `self.ta.atr(high, low, close, length)` | 平均真实波幅 | `pd.Series` |
-| `self.ta.macd(factor, fast, slow, signal)` | MACD 三线 | `pd.DataFrame` |
-| `self.ta.bbands(factor, length, std)` | 布林带三轨 | `pd.DataFrame` |
-| `self.ta.custom(factor, func, ...)` | 自定义指标 | `pd.Series` |
+| 指标名 | 声明方式 | 策略中获取 | 多输出列 |
+|--------|---------|-----------|---------|
+| SMA | `('sma', 20)` | `self.get('sma_20')` | — |
+| EMA | `('ema', 14)` | `self.get('ema_14')` | — |
+| RSI | `('rsi', 14)` | `self.get('rsi_14')` | — |
+| ATR | `('atr', 14)` | `self.get('atr_14')` | — |
+| MACD | `('macd', 12, 26, 9)` | `self.get('macd')` | 额外生成 `macd_signal`, `macd_histogram` |
+| BBANDS | `('bbands', 20, 2)` | `self.get('bbands_upper')` | 额外生成 `bbands_middle`, `bbands_lower` |
+
+> **预计算 vs 动态计算**：预计算在数据加载阶段一次性算好所有指标的完整序列。策略中每根 bar 拿到的既是当前值，也能查历史（`self.history('rsi_14', 10)`）。动态计算每 bar 重新算一遍，性能差且历史不可查。**始终使用预计算。**
 ```
 
 ---
