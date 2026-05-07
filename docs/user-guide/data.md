@@ -87,6 +87,66 @@ data = Data(
 
 ---
 
+## 预计算技术指标
+
+通过 `indicators` 参数一键声明技术指标，数据加载时自动预计算：
+
+```python
+from qka import Data
+
+data = Data(
+    symbols=['000001.SZ', '600000.SH'],
+    indicators={
+        'sma_20': ('sma', 20),           # 20 日均线
+        'sma_60': ('sma', 60),           # 60 日均线
+        'ema_14': ('ema', 14),           # 14 日指数均线
+        'rsi_14': ('rsi', 14),           # 14 日 RSI
+        'macd': ('macd', 12, 26, 9),     # MACD
+        'bbands': ('bbands', 20, 2),     # 布林带
+        'atr_14': ('atr', 14),           # 平均真实波幅
+    }
+)
+lazy = data.get(lazy=True)
+# 合并后的列：... 000001.SZ_sma_20, 000001.SZ_rsi_14, 000001.SZ_macd, ...
+```
+
+指标列跟 `close`、`volume` 一样，在策略中通过 `self.get()` 和 `self.history()` 访问：
+
+```python
+# 策略中
+sma_20 = self.get('sma_20')                    # 横截面
+macd_hist = self.history('macd', 10)           # 历史序列
+bb_upper = self.get('bbands_upper')            # 布林带上轨
+rsi_14 = self.get('rsi_14')                    # 当前 RSI
+```
+
+### 与 `factor` 的区别
+
+| | `factor` | `indicators` |
+|--|----------|-------------|
+| 适用场景 | 任意自定义计算 | 标准技术指标（SMA、MACD 等） |
+| 写法 | Python 函数 | 声明式字典 |
+| 多输出 | 手动添加多列 | 自动展开（MACD 生成 3 列） |
+| 底层 | 任意 pandas 逻辑 | 基于 `ta` 库 |
+
+二者可以同时使用，`indicators` 在 `factor` 之后执行。
+
+### 支持的指标
+
+| 指标名 | 参数 | 说明 | 生成列 |
+|--------|------|------|--------|
+| `sma` | `(length)` | 简单移动平均 | `sma_20` |
+| `ema` | `(length)` | 指数移动平均 | `ema_14` |
+| `wma` | `(length)` | 加权移动平均 | `wma_30` |
+| `rsi` | `(length)` | 相对强弱指数 | `rsi_14` |
+| `macd` | `(fast, slow, signal)` | 指数平滑异同 | `macd`, `macd_signal`, `macd_histogram` |
+| `bbands` | `(length, std)` | 布林带 | `bbands_upper`, `bbands_middle`, `bbands_lower` |
+| `atr` | `(length)` | 平均真实波幅 | `atr_14` |
+
+可指定自定义因子列：`('sma', 'high', 20)` 表示对 `high` 列计算 20 日均线。
+
+---
+
 ## 数据格式
 
 `Data.get()` 返回的 DataFrame 列名格式为 `{symbol}_{factor}`：

@@ -20,13 +20,15 @@ class Data():
     """
     数据管理类
     
-    负责股票数据的获取、缓存和管理，支持多数据源、并发下载和自定义因子计算。
+    负责股票数据的获取、缓存和管理，支持多数据源、并发下载、自定义因子计算
+    以及预计算技术指标。
     
     Attributes:
         symbols (List[str]): 股票代码列表
         period (str): 数据周期，如 '1d'、'1m' 等
         adjust (str): 复权方式，如 'qfq'、'hfq'、'bfq'
         factor (Callable): 因子计算函数
+        indicators (dict): 预计算技术指标，col_name → (ind_type, *args)
         source (str): 数据源，如 'baostock'（默认）、'akshare'、'qmt'
         pool_size (int): 并发下载线程数
         datadir (Path): 数据缓存目录
@@ -41,7 +43,8 @@ class Data():
         factor: Callable[[pd.DataFrame], pd.DataFrame] = lambda df: df,
         source: str = 'baostock',
         pool_size: int = 10,
-        datadir: Optional[Path] = None
+        datadir: Optional[Path] = None,
+        indicators: Optional[dict] = None,
     ):
         """
         初始化数据对象
@@ -53,12 +56,19 @@ class Data():
             factor: 因子计算函数，接收 DataFrame 返回 DataFrame，用于扩展自定义因子
             source: 数据来源，'baostock'（默认）、'akshare'、'qmt'
             pool_size: 并发下载线程数
-            datadir: 缓存根目录，默认为当前工作目录下的 datadir/
+            datadir: 缓存目录路径
+            indicators: 预计算技术指标，格式为 {列名: (指标名, *参数)}
+                        示例：{'sma_20': ('sma', 20), 'rsi_14': ('rsi', 14),
+                              'macd': ('macd', 12, 26, 9)}
+                        指标名支持：sma、ema、wma、rsi、macd、bbands、atr
+                        factor 默认为 'close'，多因子指标（如 bbands、atr）
+                        使用标准列名 high/low/close
         """
         self.symbols = symbols or []
         self.period = period
         self.adjust = adjust
         self.factor = factor
+        self.indicators = indicators or {}
         self.source = source
         self.pool_size = pool_size
 
@@ -181,6 +191,7 @@ class Data():
                     continue
                 ddf = dd.read_parquet(str(parquet_path))
                 ddf = self.factor(ddf)
+                ddf = self._apply_indicators(ddf)
                 column_mapping = {col: f'{symbol}_{col}' for col in ddf.columns}
                 dfs.append(ddf.rename(columns=column_mapping))
 
@@ -204,6 +215,7 @@ class Data():
                     continue
                 df = dd.read_parquet(str(parquet_path))
                 df = self.factor(df)
+                df = self._apply_indicators(df)
                 column_mapping = {col: f'{symbol}_{col}' for col in df.columns}
                 dfs.append(df.rename(columns=column_mapping))
 
@@ -216,6 +228,92 @@ class Data():
             ddf = dd.concat(dfs, axis=1, join='outer')
             self._cached = ddf.compute()
             return self._cached
+
+    def _apply_indicators(self, df: 'pd.DataFrame'):
+        """
+        对单只股票的数据计算预定义的技术指标。
+
+        Args:
+            df: 单只股票的 DataFrame
+
+        Returns:
+            DataFrame: 包含原始列和指标列
+        """
+        if not self.indicators:
+            return df
+
+        if isinstance(df, dd.DataFrame):
+            return df.map_partitions(
+                lambda partition: self._compute_indicator_cols(partition.copy())
+            )
+        return self._compute_indicator_cols(df.copy())
+
+    def _compute_indicator_cols(self, df):
+        """在 pandas DataFrame 上计算技术指标列（单只股票）。"""
+        import ta as _ta_lib
+
+        for col_name, spec in self.indicators.items():
+            # 统一解析：spec = (indicator_name, *args)
+            if isinstance(spec, (list, tuple)):
+                ind_type = spec[0]
+                args = list(spec[1:])
+            else:
+                raise TypeError(f"指标规格必须为元组，got {type(spec)}")
+
+            # 如果第一个参数是字符串，视为列名；否则默认为 'close'
+            factor = 'close'
+            rest = args
+            if args and isinstance(args[0], str):
+                factor = args[0]
+                rest = args[1:]
+
+            if ind_type == 'sma':
+                window = int(rest[0]) if rest else 20
+                df[col_name] = _ta_lib.trend.sma_indicator(df[factor], window=window)
+
+            elif ind_type == 'ema':
+                window = int(rest[0]) if rest else 30
+                df[col_name] = _ta_lib.trend.ema_indicator(df[factor], window=window)
+
+            elif ind_type == 'wma':
+                window = int(rest[0]) if rest else 30
+                df[col_name] = _ta_lib.trend.wma_indicator(df[factor], window=window)
+
+            elif ind_type == 'rsi':
+                window = int(rest[0]) if rest else 14
+                df[col_name] = _ta_lib.momentum.rsi(df[factor], window=window)
+
+            elif ind_type == 'macd':
+                fast = int(rest[0]) if len(rest) >= 1 else 12
+                slow = int(rest[1]) if len(rest) >= 2 else 26
+                signal = int(rest[2]) if len(rest) >= 3 else 9
+                _macd = _ta_lib.trend.MACD(
+                    df[factor], window_slow=slow, window_fast=fast, window_sign=signal,
+                )
+                df[col_name] = _macd.macd()
+                df[f'{col_name}_signal'] = _macd.macd_signal()
+                df[f'{col_name}_histogram'] = _macd.macd_diff()
+
+            elif ind_type == 'bbands':
+                window = int(rest[0]) if rest else 20
+                std = int(rest[1]) if len(rest) >= 2 else 2
+                _bb = _ta_lib.volatility.BollingerBands(
+                    df[factor], window=window, window_dev=std,
+                )
+                df[f'{col_name}_upper'] = _bb.bollinger_hband()
+                df[f'{col_name}_middle'] = _bb.bollinger_mavg()
+                df[f'{col_name}_lower'] = _bb.bollinger_lband()
+
+            elif ind_type == 'atr':
+                window = int(rest[0]) if rest else 14
+                df[col_name] = _ta_lib.volatility.average_true_range(
+                    df['high'], df['low'], df['close'], window=window,
+                )
+
+            else:
+                logger.warning(f"未知指标类型: {ind_type}，跳过 {col_name}")
+
+        return df
 
     def _get_from_akshare(self, symbol: str) -> pd.DataFrame:
         """
