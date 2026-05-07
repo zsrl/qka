@@ -57,6 +57,9 @@ class BuyAndHold(Strategy):
 | `self.history('close', 20)` | 过去 N 日收盘价历史 | `pd.DataFrame`（行=日期，列=股票代码） |
 | `self.get('sma_20')` | 预计算的 20 日均线 | `pd.Series` |
 | `self.history('sma_20', 10)` | 过去 10 日 SMA 历史 | `pd.DataFrame` |
+| `self.sizing.percent(0.1, price)` | 10% 可用资金买入（按手取整） | `int` |
+| `self.sizing.atr_risk(0.02, price, atr)` | 单笔风险 2% 的 ATR 仓位 | `int` |
+| `self.sizing.fixed_amount(10000, price)` | 固定 1 万元买入 | `int` |
 
 !!! tip "不再是闭包"
     与旧版本不同，`on_bar` 不再接收 `get` 参数。所有数据通过 `self.get()` 和 `self.history()` 访问，代码更简洁一致。
@@ -226,10 +229,12 @@ class RsiStrategy(Strategy):
                 continue
 
             if rsi[sym] < 30 and sym not in self.broker.positions:
-                # RSI 低于 30，超卖，买入
-                self.broker.buy(sym, price, 100)
+                # RSI 低于 30，超卖，买入（用 10% 资金）
+                size = self.sizing.percent(0.1, price)
+                if size > 0:
+                    self.broker.buy(sym, price, size)
             elif rsi[sym] > 70 and sym in self.broker.positions:
-                # RSI 高于 70，超买，卖出
+                # RSI 高于 70，超买，全部卖出
                 pos = self.broker.positions[sym]
                 self.broker.sell(sym, price, pos['size'])
 

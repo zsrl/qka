@@ -1,6 +1,6 @@
 """
 QKA Core 模块
-包含核心功能：数据处理、回测引擎、数据访问器、经纪商等
+包含核心功能：数据处理、回测引擎、数据访问器、经纪商、仓位管理等
 """
 
 
@@ -11,10 +11,14 @@ from .accessor import DataAccessor
 from .backtest import Backtest
 from .strategy import Strategy
 from .broker import Broker
+# 仓位管理
+from .sizing import SizingAccessor
 
 __all__ = [
     # 数据相关
     'Data', 'DataAccessor',
     # 回测相关
     'Backtest', 'Strategy', 'Broker',
+    # 仓位管理
+    'SizingAccessor',
 ]
