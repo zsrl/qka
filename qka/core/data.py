@@ -20,15 +20,14 @@ class Data():
     """
     数据管理类
     
-    负责股票数据的获取、缓存和管理，支持多数据源、并发下载、自定义因子计算
-    以及预计算技术指标。
+    负责股票数据的获取、缓存和管理，支持多数据源、并发下载和自定义因子计算。
+    通过 `indicators` 参数统一处理技术指标和自定义因子，在数据加载时一次性预计算。
     
     Attributes:
         symbols (List[str]): 股票代码列表
         period (str): 数据周期，如 '1d'、'1m' 等
         adjust (str): 复权方式，如 'qfq'、'hfq'、'bfq'
-        factor (Callable): 因子计算函数
-        indicators (dict): 预计算技术指标，col_name → (ind_type, *args)
+        indicators (dict | Callable): 预计算指标/因子
         source (str): 数据源，如 'baostock'（默认）、'akshare'、'qmt'
         pool_size (int): 并发下载线程数
         datadir (Path): 数据缓存目录
@@ -40,7 +39,6 @@ class Data():
         symbols: Optional[List[str]] = None,
         period: str = '1d',
         adjust: str = 'qfq',
-        factor: Callable[[pd.DataFrame], pd.DataFrame] = lambda df: df,
         source: str = 'baostock',
         pool_size: int = 10,
         datadir: Optional[Path] = None,
@@ -53,24 +51,48 @@ class Data():
             symbols: 股票代码列表，如 ['000001.SZ', '600000.SH']
             period: 数据周期，如 '1d'（日线）、'1m'（分钟）
             adjust: 复权方式，'qfq'（前复权）、'hfq'（后复权）、'bfq'（不复权）
-            factor: 因子计算函数，接收 DataFrame 返回 DataFrame，用于扩展自定义因子
             source: 数据来源，'baostock'（默认）、'akshare'、'qmt'
             pool_size: 并发下载线程数
             datadir: 缓存目录路径
-            indicators: 预计算技术指标，格式为 {列名: (指标名, *参数)}
-                        示例：{'sma_20': ('sma', 20), 'rsi_14': ('rsi', 14),
-                              'macd': ('macd', 12, 26, 9)}
-                        指标名支持：sma、ema、wma、rsi、macd、bbands、atr
-                        factor 默认为 'close'，多因子指标（如 bbands、atr）
-                        使用标准列名 high/low/close
+            indicators: 预计算指标/因子，支持三种格式：
+                
+                **1. 字典（混搭 TA 指标和自定义因子）：**
+                ```python
+                {
+                    'sma_20': ('sma', 20),           # TA 指标：列名 → (指标名, *参数)
+                    'rsi_14': ('rsi', 14),
+                    'macd': ('macd', 12, 26, 9),
+                    'ma5': lambda df: df['close'].rolling(5).mean(),  # 自定义因子
+                }
+                ```
+                支持的 TA 指标：sma、ema、wma、rsi、macd、bbands、atr
+                factor 默认为 'close'，可指定：`('sma', 'high', 20)`
+                
+                **2. 函数（自定义因子，替代旧版 factor 参数）：**
+                ```python
+                indicators=lambda df: df.assign(ma5=df['close'].rolling(5).mean())
+                ```
+                函数接收单只股票的 DataFrame，返回添加了额外列的 DataFrame。
         """
         self.symbols = symbols or []
         self.period = period
         self.adjust = adjust
-        self.factor = factor
-        self.indicators = indicators or {}
         self.source = source
         self.pool_size = pool_size
+
+        # 统一处理 indicators 参数
+        if callable(indicators):
+            # 函数形式 → 保存为 callable
+            self._indicators = indicators
+        elif isinstance(indicators, dict):
+            # 字典形式
+            self._indicators = indicators
+        elif indicators is None:
+            self._indicators = {}
+        else:
+            raise TypeError(
+                f"indicators 必须是 dict、callable 或 None，got {type(indicators)}"
+            )
 
         # 初始化缓存目录
         if datadir is None:
@@ -190,7 +212,6 @@ class Data():
                     logger.warning(f"数据文件不存在，跳过: {parquet_path}")
                     continue
                 ddf = dd.read_parquet(str(parquet_path))
-                ddf = self.factor(ddf)
                 ddf = self._apply_indicators(ddf)
                 column_mapping = {col: f'{symbol}_{col}' for col in ddf.columns}
                 dfs.append(ddf.rename(columns=column_mapping))
@@ -206,7 +227,7 @@ class Data():
             return ddf
 
         else:
-            # 全量模式（默认）：与之前一致，向后兼容
+            # 全量模式（默认）
             dfs = []
             for symbol in self.symbols:
                 parquet_path = self.target_dir / f"{symbol}.parquet"
@@ -214,7 +235,6 @@ class Data():
                     logger.warning(f"数据文件不存在，跳过: {parquet_path}")
                     continue
                 df = dd.read_parquet(str(parquet_path))
-                df = self.factor(df)
                 df = self._apply_indicators(df)
                 column_mapping = {col: f'{symbol}_{col}' for col in df.columns}
                 dfs.append(df.rename(columns=column_mapping))
@@ -242,6 +262,34 @@ class Data():
         if not self.indicators:
             return df
 
+    def _apply_indicators(self, df):
+        """
+        对单只股票的数据应用预定义的指标/因子。
+
+        支持三种形式：
+        - 空 dict → 跳过
+        - callable → 旧版 factor 风格，接收 df 返回 df
+        - dict → 混合 TA 指标和自定义 callable
+
+        Args:
+            df: 单只股票的 DataFrame
+
+        Returns:
+            DataFrame: 包含原始列和指标列
+        """
+        inds = self._indicators
+
+        # 空 → 跳过
+        if not inds:
+            return df
+
+        # 单函数形式（旧版 factor 的替代）
+        if callable(inds):
+            if isinstance(df, dd.DataFrame):
+                return df.map_partitions(lambda p: inds(p.copy()))
+            return inds(df.copy())
+
+        # 字典形式
         if isinstance(df, dd.DataFrame):
             return df.map_partitions(
                 lambda partition: self._compute_indicator_cols(partition.copy())
@@ -249,18 +297,31 @@ class Data():
         return self._compute_indicator_cols(df.copy())
 
     def _compute_indicator_cols(self, df):
-        """在 pandas DataFrame 上计算技术指标列（单只股票）。"""
+        """在 pandas DataFrame 上计算指标/因子列（单只股票）。"""
         import ta as _ta_lib
 
-        for col_name, spec in self.indicators.items():
-            # 统一解析：spec = (indicator_name, *args)
-            if isinstance(spec, (list, tuple)):
-                ind_type = spec[0]
-                args = list(spec[1:])
-            else:
-                raise TypeError(f"指标规格必须为元组，got {type(spec)}")
+        for col_name, spec in self._indicators.items():
+            # 自定义因子（callable 值）
+            if callable(spec):
+                result = spec(df)
+                if isinstance(result, pd.DataFrame):
+                    # 多列返回 → 逐列添加
+                    for c in result.columns:
+                        df[c] = result[c]
+                else:
+                    # 单值返回 → 列名 = key
+                    df[col_name] = result
+                continue
 
-            # 如果第一个参数是字符串，视为列名；否则默认为 'close'
+            # TA 指标（tuple 值）
+            if not isinstance(spec, (list, tuple)):
+                logger.warning(f"指标 {col_name} 的规格必须为 tuple 或 callable，跳过")
+                continue
+
+            ind_type = spec[0]
+            args = list(spec[1:])
+
+            # 如果第一个参数是字符串，视为自定义 factor 列名；否则默认为 'close'
             factor = 'close'
             rest = args
             if args and isinstance(args[0], str):

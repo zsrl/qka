@@ -99,21 +99,27 @@ hist = self.history('close', 20)
 # ...              ...        ...        ...
 ```
 
-### 预计算技术指标（Data 层面）
+### 预计算指标/因子（Data 层面）
 
-技术指标在数据层预计算，作为额外的列存在于合并 DataFrame 中，策略中直接通过 `self.get()` 和 `self.history()` 查询。
+`Data` 的 `indicators` 参数统一处理**技术指标**和**自定义因子**，在数据加载时一次性预计算。
+策略中直接通过 `self.get()` 和 `self.history()` 查询，无需每 bar 动态计算。
 
-#### 在 Data 中声明
+#### 格式 1：声明式字典（TA 指标 + 自定义 callable）
 
 ```python
 data = Data(
     symbols=['000001.SZ', '600000.SH'],
     indicators={
+        # TA 指标（tuple 写法）
         'sma_20': ('sma', 20),         # 20 日均线
         'ema_14': ('ema', 14),         # 14 日指数均线
         'rsi_14': ('rsi', 14),         # 14 日 RSI
         'macd': ('macd', 12, 26, 9),   # MACD（生成 3 列）
         'bbands': ('bbands', 20, 2),   # 布林带（生成 3 列）
+
+        # 自定义因子（callable，可混搭）
+        'ma5': lambda df: df['close'].rolling(5).mean(),
+        'ratio': lambda df: df['close'] / df['open'],
     }
 )
 ```
@@ -123,6 +129,17 @@ data = Data(
 ```
 合并后列名格式：{symbol}_{指标名}
 例如：000001.SZ_sma_20, 000001.SZ_macd, 000001.SZ_macd_signal
+```
+
+#### 格式 2：函数（替代旧版 `factor` 参数）
+
+```python
+def add_ma5(df):
+    df['ma5'] = df['close'].rolling(5).mean()
+    return df
+
+data = Data(symbols=['000001.SZ'], indicators=add_ma5)
+# 等价于旧版 Data(..., factor=add_ma5)
 ```
 
 #### 在策略中使用
