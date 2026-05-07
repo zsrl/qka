@@ -4,6 +4,85 @@
 
 ---
 
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。
+
 ## 整体架构
 
 ```
@@ -14,6 +93,7 @@ qka/
 │   ├── strategy.py     # 策略基类
 │   ├── accessor.py     # 滚动窗口数据访问器（DataAccessor）
 │   ├── broker.py       # 虚拟经纪商（交易执行 + 费用计算）
+│   ├── sizing.py       # 仓位计算工具（SizingAccessor）
 │   └── report.py       # HTML 报告生成
 ├── brokers/            # QMT 实盘对接
 ├── mcp/                # MCP 服务
@@ -24,13 +104,93 @@ qka/
 
 ---
 
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。
+
 ## 核心流程
 
 ```
 Data ──> Backtest.run() ──> dask 分区迭代 ──> Strategy.on_bar(date) ──> Broker.buy/sell()
-                    │                                                         │
-                    v                                                         v
-               summary() / report()                              DataAccessor (self.get / self.history)
+                    │                                          │              ▲
+                    v                                          ▼              │
+               summary() / report()           SizingAccessor (self.sizing) ───┘
+                                              DataAccessor (self.get / self.history)
 ```
 
 **流程说明：**
@@ -39,10 +199,90 @@ Data ──> Backtest.run() ──> dask 分区迭代 ──> Strategy.on_bar(da
 2. **`Backtest`** 用 dask 合并为 lazy DataFrame，按时间分区分批计算
 3. 每个分区 compute() 后，逐 bar 调用 `strategy.on_bar(date)`
 4. **`Strategy.on_bar(date)`** 用 `self.get('close')` / `self.history('close', 20)` 获取数据
-5. **`Broker.buy/sell()`** 执行交易，自动扣费（佣金 + 印花税 + 滑点）
-6. 回测结束后，**`summary()`** 和 **`report()`** 输出结果
+5. **`SizingAccessor`** 根据可用资金计算买入股数，传入 `self.broker.buy()`
+6. **`Broker.buy/sell()`** 执行交易，自动扣费（佣金 + 印花税 + 滑点）
+7. 回测结束后，**`summary()`** 和 **`report()`** 输出结果
 
 ---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。
 
 ## 核心抽象
 
@@ -158,7 +398,639 @@ def on_bar(self, date):
 #### 支持的指标
 
 | 指标名 | 参数 | 生成列 | 备注 |
-|--------|------|--------|------|
+|---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。--|---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。|---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。--|---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。|
 | `sma` | `(length)` | `sma_20` | 简单移动平均 |
 | `ema` | `(length)` | `ema_14` | 指数移动平均 |
 | `wma` | `(length)` | `wma_30` | 加权移动平均 |
@@ -172,18 +1044,1914 @@ def on_bar(self, date):
 #### 对比：预计算 vs 动态计算
 
 | 方式 | 性能 | 策略代码简洁度 | 历史数据支持 |
-|------|------|---------------|-------------|
+|---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。|---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。|---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。|---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。-|
 | **预计算（推荐）** | 一次算好，各 bar 复用 | `self.get('sma_20')` | ✅ `self.history('sma_20', 20)` |
 | 动态计算（旧方式） | 每 bar 重复算 | `self.ta.sma('close', length=20)` | ❌ 需额外逻辑 |
 
 ---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。
 
 ### `Broker` — 虚拟经纪商
 
 管理资金、持仓和交易，自动处理：
 
 | 费用 | 方向 | 默认费率 | 最低收费 |
-|------|------|----------|----------|
+|---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。|---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。|---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。-|---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。-|
 | 佣金 | 双向 | 万2.5 | 5 元 |
 | 印花税 | 卖出 | 万5 | 无 |
 | 滑点 | 双向 | 0.1% | 无 |
@@ -201,15 +2969,489 @@ self.broker = Broker(
 
 ---
 
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。
+
 ### `Backtest` 三件套
 
 | 方法 | 功能 |
-|------|------|
+|---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。|---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。|
 | `run(benchmark=None)` | 执行回测，可选基准对比 |
 | `summary()` | 打印绩效指标，返回 dict |
 | `report(title='', output_path=None)` | 生成自包含 HTML 报告 |
 
 ---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。
 
 ## 数据存储模型
 
@@ -228,12 +3470,407 @@ datadir/
 回测时，dask 将所有 parquet 合并为 lazy DataFrame。列名格式为 `{symbol}_{factor}`：
 
 | 列名 | 含义 |
-|------|------|
+|---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。|---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。|
 | `000001.SZ_close` | 平安银行收盘价 |
 | `000001.SZ_volume` | 平安银行成交量 |
 | `600000.SH_close` | 浦发银行收盘价 |
 
 ---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。
 
 ## 性能原理
 
@@ -247,6 +3884,85 @@ QKA 的回测引擎使用 **dask 分区迭代** 处理大规模数据：
 这种设计让 QKA 可以高效处理数百只股票数年数据，同时保持单机运行。详见 [性能优化](../advanced/performance.md)。
 
 ---
+
+### `SizingAccessor` — 仓位计算工具
+
+`SizingAccessor` 挂载在 `strategy.sizing` 下，根据可用资金和价格计算买入股数。
+所有结果自动按手（100股）向下取整，不足一手返回 0。
+
+```
+              ┌─────────────────────┐
+              │  Broker             │
+              │  ───────────        │
+              │  cash: ¥100,000     │
+              │  positions: {...}   │
+              └────────┬────────────┘
+                       │ reads cash
+                       ▼
+┌─────────────────────────────────┐
+│        SizingAccessor           │
+│                                 │
+│  percent(0.1, ¥10) → 1000 股   │
+│  atr_risk(0.02, ¥10, 0.5) → 2000 股
+│  kelly(0.6, 2.0, ¥10) → 4000 股
+└─────────────────────────────────┘
+```
+
+#### 使用场景示例
+
+```python
+def on_bar(self, date):
+    price = float(self.get('close')['000001.SZ'])
+    if price <= 0:
+        return
+
+    # 硬性风控：每笔亏损不超过总资金 2%
+    atr = float(self.get('atr_14')['000001.SZ'])
+    size = self.sizing.atr_risk(0.02, price, atr)
+    if size > 0:
+        self.broker.buy('000001.SZ', price, size)
+```
+
+#### 方法总览
+
+| 方法 | 适用场景 | 公式 | 返回值 |
+|------|---------|------|--------|
+| `fixed_shares(n)` | 固定股数定投 | 直接取整 | `int` |
+| `fixed_amount(amount, price)` | 每月固定金额投入 | `amount / price` | `int` |
+| `percent(ratio, price)` | 按资金比例分配仓位 | `cash × ratio / price` | `int` |
+| `atr_risk(risk_ratio, price, atr, multiplier=2)` | 基于波动率的动态仓位 | `cash × risk / (atr × mult)` | `int` |
+| `kelly(win_rate, wl_ratio, price)` | 已知胜率赔率的最优下注 | 凯利公式 `(p×b-q)/b` | `int` |
+
+#### 方法详解
+
+**`percent(ratio, price)`** — 最常用。用可用现金的 `ratio` 比例买入：
+
+```python
+# 半仓买入 000001.SZ
+size = self.sizing.percent(0.5, float(self.get('close')['000001.SZ']))
+```
+
+**`atr_risk(risk_ratio, price, atr, multiplier=2)`** — 波动率自适应仓位。
+ATR 越大，单股风险越高，买入股数自动减少：
+
+```python
+# 每笔亏损 ≤ 2% 总资金，止损位 2 倍 ATR
+atr = float(self.get('atr_14')['000001.SZ'])
+size = self.sizing.atr_risk(0.02, price, atr)
+# ATR=0.5 → size=2000；ATR=1.0 → size=1000（波动翻倍，仓位减半）
+```
+
+**`kelly(win_rate, win_loss_ratio, price)`** — 已知历史胜率和赔率时的最优仓位。
+当 f* ≤ 0 时返回 0（不下注）：
+
+```python
+# 胜率 60%，平均盈利/亏损 = 2
+size = self.sizing.kelly(0.6, 2.0, price)
+# f* = (0.6*2 - 0.4)/2 = 0.4 → 40% 仓位
+```
+
+> **注意：** 所有方法基于 `broker.cash`（可用现金）计算，不含持仓市值。
+> 如需基于总资产计算，先手动合并持仓市值。
 
 ## 设计原则
 
