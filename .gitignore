@@ -177,9 +177,9 @@ _debug_*.py
 _temp_*.txt
 _momentum_output.txt
 
-# 示例和测试（不入库）
-examples/
-tests/
+# 示例和测试（不入库，仓库根目录下的）
+/examples/
+/tests/
 
 # 回测报告
 reports/
