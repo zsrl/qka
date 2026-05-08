@@ -45,3 +45,14 @@
       show_source: true
       members_order: source
       heading_level: 3
+
+---
+
+## `qka.SizingAccessor`
+
+::: qka.core.sizing.SizingAccessor
+    options:
+      show_root_heading: false
+      show_source: true
+      members_order: source
+      heading_level: 3

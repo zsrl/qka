@@ -87,13 +87,37 @@ data = Data(
 
 ---
 
-## 预计算技术指标
+## indicators — 预计算指标/因子
 
-通过 `indicators` 参数一键声明技术指标，数据加载时自动预计算：
+通过 `indicators` 参数统一处理**技术指标**和**自定义因子**，在数据加载时一次性预计算。
+支持三种格式：
+
+### 格式 1：函数（替代旧版 `factor`）
 
 ```python
-from qka import Data
+def add_ma5(df):
+    """接收单只股票的 DataFrame，返回添加了额外列的 DataFrame"""
+    df['ma5'] = df['close'].rolling(5).mean()
+    df['ma20'] = df['close'].rolling(20).mean()
+    return df
 
+data = Data(symbols=['000001.SZ'], indicators=add_ma5)
+# 等价于旧版 data = Data(..., factor=add_ma5)
+```
+
+也支持 lambda：
+
+```python
+data = Data(symbols=['000001.SZ'], indicators=lambda df: df.assign(
+    ratio=df['close'] / df['open']
+))
+```
+
+### 格式 2：字典（混合 TA 指标 + 自定义 callable）
+
+**声明式 TA 指标：**
+
+```python
 data = Data(
     symbols=['000001.SZ', '600000.SH'],
     indicators={
@@ -101,37 +125,42 @@ data = Data(
         'sma_60': ('sma', 60),           # 60 日均线
         'ema_14': ('ema', 14),           # 14 日指数均线
         'rsi_14': ('rsi', 14),           # 14 日 RSI
-        'macd': ('macd', 12, 26, 9),     # MACD
-        'bbands': ('bbands', 20, 2),     # 布林带
+        'macd': ('macd', 12, 26, 9),     # MACD（自动展开 3 列）
+        'bbands': ('bbands', 20, 2),     # 布林带（自动展开 3 列）
         'atr_14': ('atr', 14),           # 平均真实波幅
     }
 )
-lazy = data.get(lazy=True)
-# 合并后的列：... 000001.SZ_sma_20, 000001.SZ_rsi_14, 000001.SZ_macd, ...
 ```
 
-指标列跟 `close`、`volume` 一样，在策略中通过 `self.get()` 和 `self.history()` 访问：
+**混入自定义 callable：**
+
+```python
+data = Data(
+    symbols=['000001.SZ'],
+    indicators={
+        # TA 指标
+        'sma_20': ('sma', 20),
+        'rsi_14': ('rsi', 14),
+        # 自定义因子（callable）
+        'ma5': lambda df: df['close'].rolling(5).mean(),
+        'ratio': lambda df: df['close'] / df['open'],
+    }
+)
+```
+
+### 在策略中访问
+
+指标列跟 `close`、`volume` 一样，在策略中直接 `self.get()` 和 `self.history()`：
 
 ```python
 # 策略中
 sma_20 = self.get('sma_20')                    # 横截面
 macd_hist = self.history('macd', 10)           # 历史序列
 bb_upper = self.get('bbands_upper')            # 布林带上轨
-rsi_14 = self.get('rsi_14')                    # 当前 RSI
+ma5 = self.get('ma5')                          # 自定义因子
 ```
 
-### 与 `factor` 的区别
-
-| | `factor` | `indicators` |
-|--|----------|-------------|
-| 适用场景 | 任意自定义计算 | 标准技术指标（SMA、MACD 等） |
-| 写法 | Python 函数 | 声明式字典 |
-| 多输出 | 手动添加多列 | 自动展开（MACD 生成 3 列） |
-| 底层 | 任意 pandas 逻辑 | 基于 `ta` 库 |
-
-二者可以同时使用，`indicators` 在 `factor` 之后执行。
-
-### 支持的指标
+### 支持的 TA 指标
 
 | 指标名 | 参数 | 说明 | 生成列 |
 |--------|------|------|--------|
@@ -143,7 +172,14 @@ rsi_14 = self.get('rsi_14')                    # 当前 RSI
 | `bbands` | `(length, std)` | 布林带 | `bbands_upper`, `bbands_middle`, `bbands_lower` |
 | `atr` | `(length)` | 平均真实波幅 | `atr_14` |
 
-可指定自定义因子列：`('sma', 'high', 20)` 表示对 `high` 列计算 20 日均线。
+可指定自定义 factor 列：`('sma', 'high', 20)` 表示对 `high` 列计算 20 日均线。
+
+### 自定义 callable 规则
+
+| 返回值 | 行为 | 示例 |
+|--------|------|------|
+| `pd.Series` | 用 dict key 作为列名 | `lambda df: df['close'].rolling(5).mean()` |
+| `pd.DataFrame` | 使用 DataFrame 的列名（忽略 dict key） | `lambda df: pd.DataFrame({'a': ..., 'b': ...})` |
 
 ---
 
