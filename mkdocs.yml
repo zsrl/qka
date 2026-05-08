@@ -118,16 +118,23 @@ extra:
 # Navigation
 nav:
   - 首页: index.md
-  - 快速开始:
-    - 安装指南: getting-started/installation.md
-    - 第一个策略: getting-started/first-strategy.md
-    - 基础概念: getting-started/concepts.md
-  - 用户指南:
-    - 数据获取: user-guide/data.md
-    - 回测分析: user-guide/backtest.md
-    - 实盘交易: user-guide/trading.md
-  - 进阶:
+  - 快速开始: getting-started/quickstart.md
+  - 核心概念:
+    - 数据获取与缓存: concepts/data.md
+    - 预计算指标: concepts/indicators.md
+    - 策略开发: concepts/strategy.md
+    - 仓位管理: concepts/sizing.md
+    - 经纪商与交易: concepts/broker.md
+    - 回测引擎: concepts/backtest.md
+  - 策略示例:
+    - 买入持有与定投: examples/buy_and_hold.md
+    - 均线交叉: examples/ma_cross.md
+    - RSI + ATR 风控: examples/rsi_atr.md
+    - 动量排序选股: examples/momentum.md
+    - 多因子打分: examples/multi_factor.md
+  - 进阶指南:
     - 性能优化: advanced/performance.md
+    - 实盘交易: user-guide/trading.md
   - API参考:
     - 核心模块: api/core.md
     - 交易模块: api/brokers.md
