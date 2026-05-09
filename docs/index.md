@@ -19,13 +19,13 @@ bt.report()
 
 ---
 
-## 装
+## 安装
 
 ```bash
 pip install qka
 ```
 
-需要 Python 3.10 以上。就这样，没别的。
+需要 Python 3.10 以上。
 
 ---
 
@@ -45,7 +45,7 @@ class BuyAndHold(Strategy):
         self.bought = False
 
     def on_bar(self, date):
-        """每来一根 K 线，调用一次"""
+        """每根 K 线调用一次"""
         close = self.get('close')
         if close is None or close.empty:
             return
@@ -62,7 +62,7 @@ class BuyAndHold(Strategy):
 
 - `on_bar(self, date)` — 每根 K 线调一次，date 是当天日期
 - `self.get('close')` — 取当天所有股票的收盘价
-- `self.sizing.percent(0.2, price)` — 拿 20% 的可用资金买
+- `self.sizing.percent(0.2, price)` — 用可用资金的 20% 买入，自动按手取整
 - `self.broker.buy(symbol, price, size)` — 买入
 
 ---
@@ -101,13 +101,13 @@ QKA 回测报告 — BuyAndHold
 ────────────────────────────────────────
 ```
 
-换个好看点的：
+使用 HTML 报告：
 
 ```python
 bt.report(title='买入持有策略')
 ```
 
-浏览器会自动打开一个 HTML 页面，有净值曲线、月度收益热力图、交易明细，手机上也能看。
+浏览器打开一个包含净值曲线、月度收益热力图、交易明细的交互页面，手机上也能正常查看。
 
 ---
 
@@ -143,7 +143,7 @@ bt.summary()
 bt.report()
 ```
 
-复制粘贴就能跑。
+复制即可运行。
 
 ---
 

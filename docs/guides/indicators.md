@@ -1,10 +1,10 @@
 # 指标
 
-写策略的时候需要均线、RSI、MACD 这些技术指标。QKA 在数据加载时一次性算好，策略里直接拿。
+策略中经常需要均线、RSI、MACD 等技术指标。QKA 在数据加载时一次性预计算完毕，策略中直接读取。
 
 ---
 
-## 一句话
+## 基本用法
 
 ```python
 data = Data(
@@ -16,7 +16,7 @@ data = Data(
 )
 ```
 
-策略里直接用：
+策略中直接调用：
 
 ```python
 def on_bar(self, date):
@@ -36,27 +36,30 @@ def on_bar(self, date):
 | MACD | `('macd', 12, 26, 9)` | `macd`、`macd_signal`、`macd_histogram` |
 | 布林带 | `('bbands', 20, 2)` | `bbands_upper`、`bbands_middle`、`bbands_lower` |
 
-## 对指定字段算
+## 指定计算字段
+
+默认以收盘价（close）计算。如需对其他字段计算：
 
 ```python
 indicators={
-    'sma_high_10': ('sma', 'high', 10),    # 对最高价算均线
+    'sma_high_10': ('sma', 'high', 10),    # 对最高价计算均线
 }
 ```
 
 ## 自定义指标
 
-写个函数，想怎么算都行：
+通过函数实现任意自定义计算逻辑：
 
 ```python
 def add_ma5(df):
+    """每只股票单独计算 5 日均线"""
     df['ma5'] = df['close'].rolling(5).mean()
     return df
 
 data = Data(symbols=['000001.SZ'], indicators=add_ma5)
 ```
 
-函数接收每只股票的 DataFrame，返回加了新列的 DataFrame。和内置指标可以混着用：
+函数接收每只股票的 DataFrame，返回添加新列后的 DataFrame。可与内置指标混用：
 
 ```python
 indicators={
@@ -65,11 +68,11 @@ indicators={
 }
 ```
 
-## 预计算 vs 动态计算
+## 预计算与动态计算对比
 
-| 方式 | 算几次 | 策略里咋用 |
-|------|--------|-----------|
-| 预计算 | 加载时算 1 次 | `self.get('sma_20')` |
-| 动态计算 | 每根 bar 算 1 次 | 每 bar 手动调 rolling |
+| 方式 | 计算次数 | 策略中的用法 |
+|------|---------|-------------|
+| 预计算 | 加载时计算 1 次 | `self.get('sma_20')` |
+| 动态计算 | 每根 bar 计算 1 次 | 每 bar 手动调用 rolling |
 
-股票越多、bar 越多，预计算优势越大。
+股票数量越多、回测周期越长，预计算的性能优势越明显。
