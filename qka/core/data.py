@@ -467,7 +467,9 @@ class Data():
             pd.DataFrame: 股票数据，以 date 为索引，包含 open, high, low, close, volume, amount 列
         """
         # baostock 代码格式：sz.000001 / sh.600000
-        bs_code = symbol.replace('.SZ', '.sz').replace('.SH', '.sh').replace('.BJ', '.bj')
+        exchange = symbol[-2:].lower()  # 'sz', 'sh', 'bj'
+        code = symbol.split('.')[0]  # '000001'
+        bs_code = f"{exchange}.{code}"
 
         # adjustflag: 1=不复权, 2=前复权, 3=后复权
         adjust_map = {'bfq': '1', 'qfq': '2', 'hfq': '3'}
