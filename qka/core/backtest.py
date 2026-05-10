@@ -44,21 +44,22 @@ class Backtest:
         """
         解析一行 iterrows 数据为 per-factor 字典。
 
-        列名格式: {symbol}_{factor}
-        例: '000001.SZ_close' → factor='close', symbol='000001.SZ'
+        列名格式: {symbol}|{factor}
+        例: '000001.SZ|close' → factor='close', symbol='000001.SZ'
+            '000001.SZ|sma_5' → factor='sma_5', symbol='000001.SZ'
 
         Args:
-            row: pd.Series，列名格式 {symbol}_{factor}
+            row: pd.Series，列名格式 {symbol}|{factor}
 
         Returns:
             dict: {factor: {symbol: value}}
         """
         by_factor = defaultdict(dict)
         for col, val in row.items():
-            if not isinstance(col, str) or '_' not in col:
+            if not isinstance(col, str) or '|' not in col:
                 continue
-            *sym_parts, factor = col.rsplit('_', 1)
-            symbol = '_'.join(sym_parts)
+            *sym_parts, factor = col.rsplit('|', 1)
+            symbol = '|'.join(sym_parts)
             by_factor[factor][symbol] = val
         return dict(by_factor)
 

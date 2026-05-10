@@ -147,8 +147,8 @@ class Data():
                   默认 False，返回 compute() 后的 pandas DataFrame（向后兼容）。
 
         Returns:
-            lazy=False: pd.DataFrame，列名格式 {symbol}_{factor}
-            lazy=True: dd.DataFrame，列名格式 {symbol}_{factor}
+            lazy=False: pd.DataFrame，列名格式 {symbol}|{factor}
+            lazy=True: dd.DataFrame，列名格式 {symbol}|{factor}
             没有数据时抛出 RuntimeError
         """
         if not self.symbols:
@@ -204,7 +204,7 @@ class Data():
                 bs.logout()
 
         if lazy:
-            # 懒加载模式：返回 dask DataFrame，列名 {symbol}_{factor}
+            # 懒加载模式：返回 dask DataFrame，列名 {symbol}|{factor}
             dfs = []
             for symbol in self.symbols:
                 parquet_path = self.target_dir / f"{symbol}.parquet"
@@ -213,7 +213,7 @@ class Data():
                     continue
                 ddf = dd.read_parquet(str(parquet_path))
                 ddf = self._apply_indicators(ddf)
-                column_mapping = {col: f'{symbol}_{col}' for col in ddf.columns}
+                column_mapping = {col: f'{symbol}|{col}' for col in ddf.columns}
                 dfs.append(ddf.rename(columns=column_mapping))
 
             if not dfs:
@@ -236,7 +236,7 @@ class Data():
                     continue
                 df = dd.read_parquet(str(parquet_path))
                 df = self._apply_indicators(df)
-                column_mapping = {col: f'{symbol}_{col}' for col in df.columns}
+                column_mapping = {col: f'{symbol}|{col}' for col in df.columns}
                 dfs.append(df.rename(columns=column_mapping))
 
             if not dfs:
@@ -291,14 +291,24 @@ class Data():
 
         # 字典形式
         if isinstance(df, dd.DataFrame):
+            # 先用样本分区计算指标，获得准确的 meta（含新增的指标列）
+            # 避免 dask 在迷你分区上推理 meta 时因窗口不足而崩溃
+            sample = df.head(200)
+            meta = self._compute_indicator_cols(sample.copy())
             return df.map_partitions(
-                lambda partition: self._compute_indicator_cols(partition.copy())
+                lambda partition: self._compute_indicator_cols(partition.copy()),
+                meta=meta,
             )
         return self._compute_indicator_cols(df.copy())
 
     def _compute_indicator_cols(self, df):
         """在 pandas DataFrame 上计算指标/因子列（单只股票）。"""
         import ta as _ta_lib
+
+        # 分区过小时跳过，避免 ta-lib（如 ATR window=14）在 dask meta 推断时崩溃
+        min_rows = self._min_rows_for_indicators()
+        if len(df) < min_rows:
+            return df
 
         for col_name, spec in self._indicators.items():
             # 自定义因子（callable 值）
@@ -375,6 +385,31 @@ class Data():
                 logger.warning(f"未知指标类型: {ind_type}，跳过 {col_name}")
 
         return df
+
+    def _min_rows_for_indicators(self):
+        """计算所有指标所需的最小行数。"""
+        if not self._indicators or not isinstance(self._indicators, dict):
+            return 0
+        max_window = 0
+        for spec in self._indicators.values():
+            if callable(spec) or not isinstance(spec, (list, tuple)):
+                continue
+            args = list(spec[1:])
+            rest = args
+            if args and isinstance(args[0], str):
+                rest = args[1:]
+            ind_type = spec[0]
+            if ind_type in ('sma', 'ema', 'wma', 'rsi', 'atr'):
+                w = int(rest[0]) if rest else (30 if ind_type in ('ema', 'wma') else (20 if ind_type == 'sma' else 14))
+                max_window = max(max_window, w)
+            elif ind_type == 'bbands':
+                w = int(rest[0]) if rest else 20
+                max_window = max(max_window, w)
+            elif ind_type == 'macd':
+                fast = int(rest[0]) if len(rest) >= 1 else 12
+                slow = int(rest[1]) if len(rest) >= 2 else 26
+                max_window = max(max_window, fast, slow)
+        return max_window
 
     def _get_from_akshare(self, symbol: str) -> pd.DataFrame:
         """
