@@ -129,7 +129,7 @@ class Data():
             df = pd.DataFrame()
 
         if len(df) == 0:
-            return path
+            raise RuntimeError(f"{symbol}: baostock 返回空数据")
 
         table = pa.Table.from_pandas(df)
         pq.write_table(table, path)
@@ -179,7 +179,7 @@ class Data():
                         self._download(symbol)
                     except Exception as e:
                         errors.append(f"{symbol}: {e}")
-                        logger.warning(f"下载 {symbol} 失败: {e}")
+                        print(f"\n[警告] 下载 {symbol} 失败: {e}")
             else:
                 # 其他数据源（akshare 等）并发下载
                 with ThreadPoolExecutor(max_workers=self.pool_size) as executor:
@@ -194,11 +194,14 @@ class Data():
                                 future.result()
                             except Exception as e:
                                 errors.append(f"{symbol}: {e}")
-                                logger.warning(f"下载 {symbol} 失败: {e}")
+                                print(f"\n[警告] 下载 {symbol} 失败: {e}")
                             pbar.update(1)
                             pbar.set_postfix_str(f"当前: {symbol}")
             if errors:
-                logger.warning(f"共 {len(errors)} 只股票下载失败: {errors[:3]}...")
+                raise RuntimeError(
+                    f"共 {len(errors)} 只股票下载失败:\n" +
+                    "\n".join(f"  - {e}" for e in errors)
+                )
         finally:
             if bs_logged_in:
                 bs.logout()
@@ -467,7 +470,9 @@ class Data():
             pd.DataFrame: 股票数据，以 date 为索引，包含 open, high, low, close, volume, amount 列
         """
         # baostock 代码格式：sz.000001 / sh.600000
-        bs_code = symbol.replace('.SZ', '.sz').replace('.SH', '.sh').replace('.BJ', '.bj')
+        exchange = symbol[-2:].lower()  # 'sz', 'sh', 'bj'
+        code = symbol.split('.')[0]  # '000001'
+        bs_code = f"{exchange}.{code}"
 
         # adjustflag: 1=不复权, 2=前复权, 3=后复权
         adjust_map = {'bfq': '1', 'qfq': '2', 'hfq': '3'}
@@ -481,6 +486,8 @@ class Data():
             frequency='d',
             adjustflag=adjustflag,
         )
+        if rs.error_code != '0':
+            raise RuntimeError(f"baostock 查询 {symbol}({bs_code}) 失败: {rs.error_msg}")
         df = rs.get_data()
 
         if len(df) == 0:
