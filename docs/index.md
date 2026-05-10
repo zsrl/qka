@@ -85,7 +85,7 @@ bt.run(benchmark='000300.SH')
 bt.summary()
 ```
 
-终端输出长这样：
+终端输出示例：
 
 ```
 QKA 回测报告 — BuyAndHold
@@ -113,7 +113,7 @@ bt.report(title='买入持有策略')
 
 ## 完整代码
 
-上面几步凑在一起就是：
+以上步骤合并为完整代码：
 
 ```python
 from qka import Data, Strategy, Broker, Backtest

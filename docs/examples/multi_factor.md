@@ -13,6 +13,7 @@ class MultiFactor(Strategy):
     def __init__(self):
         super().__init__()
         self.broker = Broker(initial_cash=1_000_000)
+        self.last_month = None
 
     def on_bar(self, date):
         close = self.get('close')
@@ -22,6 +23,11 @@ class MultiFactor(Strategy):
         # 每月末调仓
         if date.day < 28:
             return
+
+        month_key = (date.year, date.month)
+        if self.last_month == month_key:
+            return
+        self.last_month = month_key
 
         rsi = self.get('rsi_14')
         hist = self.history('rsi_14', 20)

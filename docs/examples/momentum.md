@@ -7,32 +7,27 @@
 ```python
 """每月末按动量排序，选前 20% 的股票买入"""
 from qka import Data, Strategy, Broker, Backtest
-import numpy as np
 
 
 class Momentum(Strategy):
     def __init__(self):
         super().__init__()
         self.broker = Broker(initial_cash=1_000_000)
-        self.monthly_rebalance = False
-        self.holdings = []
+        self.last_month = None
 
     def on_bar(self, date):
-        # 月末调仓
+        # 月末附近调仓
         if date.day < 28:
             return
 
-        # 每月只调一次（本周最后一个交易日）
-        if self.monthly_rebalance:
+        # 本月已调仓，跳过
+        month_key = (date.year, date.month)
+        if self.last_month == month_key:
             return
-        self.monthly_rebalance = True
-
-        # 下个月的第一天重置标记
-        if date.day >= 28:
-            pass  # 保持标记，等跨月再重置
+        self.last_month = month_key
 
         close = self.get('close')
-        if close is None or close.empty or len(close) < 5:
+        if close is None or close.empty:
             return
 
         # 过去 60 个交易日的动量
@@ -40,7 +35,7 @@ class Momentum(Strategy):
         if hist is None or hist.empty:
             return
 
-        # 算每只股票的收益率
+        # 计算每只股票的阶段收益率
         ret = {}
         for sym in hist.columns:
             prices = hist[sym].dropna()
@@ -55,7 +50,7 @@ class Momentum(Strategy):
         top_n = max(1, len(sorted_syms) // 5)
         buy_list = sorted_syms[:top_n]
 
-        # 卖出不在列表里的
+        # 卖出不在列表里的持仓
         for sym in list(self.broker.positions.keys()):
             if sym not in buy_list:
                 pos = self.broker.positions[sym]
@@ -63,7 +58,7 @@ class Momentum(Strategy):
                 if price > 0:
                     self.broker.sell(sym, price, pos['size'])
 
-        # 买入列表里的新标的
+        # 买入列表中的新标的
         cash_per_sym = self.broker.cash / len(buy_list)
         for sym in buy_list:
             if sym in self.broker.positions:
