@@ -7,12 +7,11 @@
 ## 基本结构
 
 ```python
-from qka import Strategy, Broker
+from qka import Strategy
 
 class MyStrategy(Strategy):
-    def __init__(self):
-        super().__init__()
-        self.broker = Broker(initial_cash=100_000)
+    def __init__(self, cash=100_000):
+        super().__init__(cash=cash)
 
     def on_bar(self, date):
         close = self.get('close')
@@ -80,9 +79,8 @@ size = self.sizing.atr_risk(0.02, price, atr)    # ATR 风控仓位
 
 ```python
 class MyStrategy(Strategy):
-    def __init__(self):
-        super().__init__()
-        self.broker = Broker(initial_cash=100_000)
+    def __init__(self, cash=100_000):
+        super().__init__(cash=cash)
         self.bought = False          # 自定义状态
         self.entry_prices = {}        # 入场价格记录
 ```

@@ -10,9 +10,8 @@ from qka import Data, Strategy, Broker, Backtest
 
 
 class MultiFactor(Strategy):
-    def __init__(self):
-        super().__init__()
-        self.broker = Broker(initial_cash=1_000_000)
+    def __init__(self, cash=1_000_000):
+        super().__init__(cash=cash)
         self.last_month = None
 
     def on_bar(self, date):

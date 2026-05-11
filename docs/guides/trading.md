@@ -41,12 +41,12 @@ self.broker.sell('000001.SZ', price, size)
 
 ```python
 self.broker.cash           # 当前可用资金（¥85,000）
-self.broker.positions      # {'000001.SZ': {'size': 1000, 'cost_basis': 10.2}}
+self.broker.positions      # {'000001.SZ': {'size': 1000, 'avg_price': 10.2}}
 ```
 
 `positions` 中每只股票包含：
 - `size` — 持仓股数
-- `cost_basis` — 平均买入成本
+- `avg_price` — 平均买入成本
 
 ## 完整的买卖流程
 
@@ -70,7 +70,7 @@ def on_bar(self, date):
         # 涨幅超过 20% 则卖出
         else:
             pos = self.broker.positions[sym]
-            cost = pos['cost_basis']
+            cost = pos['avg_price']
             if price / cost - 1 > 0.2:
                 self.broker.sell(sym, price, pos['size'])
 ```
