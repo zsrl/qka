@@ -5,8 +5,7 @@ from qka import Data, Strategy, Broker, Backtest
 
 class MyStrategy(Strategy):
     def __init__(self):
-        super().__init__()
-        self.broker = Broker(100_000)
+        super().__init__(cash=100_000)
     def on_bar(self, date):
         close = self.get('close')
         if close is not None and '000001.SZ' in close.index:
@@ -39,9 +38,8 @@ from qka import Data, Strategy, Broker, Backtest
 class BuyAndHold(Strategy):
     """买入平安银行，一直持有"""
 
-    def __init__(self):
-        super().__init__()
-        self.broker = Broker(initial_cash=100_000)
+    def __init__(self, cash=100_000):
+        super().__init__(cash=cash)
         self.bought = False
 
     def on_bar(self, date):
@@ -119,9 +117,8 @@ bt.report(title='买入持有策略')
 from qka import Data, Strategy, Broker, Backtest
 
 class BuyAndHold(Strategy):
-    def __init__(self):
-        super().__init__()
-        self.broker = Broker(initial_cash=100_000)
+    def __init__(self, cash=100_000):
+        super().__init__(cash=cash)
         self.bought = False
 
     def on_bar(self, date):

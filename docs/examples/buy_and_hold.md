@@ -12,9 +12,8 @@ from qka import Data, Strategy, Broker, Backtest
 
 
 class BuyAndHold(Strategy):
-    def __init__(self):
-        super().__init__()
-        self.broker = Broker(initial_cash=100_000)
+    def __init__(self, cash=100_000):
+        super().__init__(cash=cash)
         self.bought = False
 
     def on_bar(self, date):
@@ -50,9 +49,8 @@ from qka import Data, Strategy, Broker, Backtest
 
 
 class MonthlyDCA(Strategy):
-    def __init__(self):
-        super().__init__()
-        self.broker = Broker(initial_cash=100_000)
+    def __init__(self, cash=100_000):
+        super().__init__(cash=cash)
 
     def on_bar(self, date):
         # 每月 1 号买入

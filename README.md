@@ -1,4 +1,5 @@
 # QKA — 快量化
+## Quant Kit for A-shares
 
 <p align="center">
   <a href="https://qka.quantai.chat" target="_blank">
@@ -15,119 +16,109 @@
   </a>
 </p>
 
-**快捷量化助手（Quick Quantitative Assistant）** — 简洁易用的 A 股量化交易框架。三行代码完成回测，从研究到实盘一路畅通。
-
----
-
-## 三行代码跑回测
+**QKA（快量化 / Quant Kit for A-shares）** — 简洁易用的 A 股量化回测框架。
 
 ```python
-import qka
+from qka import Data, Strategy, Backtest
 
-bt = qka.Backtest(qka.Strategy()).run(benchmark='000300.SH')
-bt.report('我的策略')   # 生成交互式 HTML 报告，浏览器自动打开
+class MyStrategy(Strategy):
+    def on_bar(self, date):
+        close = self.get('close')
+        for sym in close.index:
+            if sym not in self.broker.positions:
+                price = float(close[sym])
+                if price > 0:
+                    size = self.sizing.percent(0.1, price)
+                    if size >= 100:
+                        self.broker.buy(sym, price, size)
+
+bt = Backtest(Data(['000001.SZ']), MyStrategy(cash=100_000))
+bt.run(benchmark='000300.SH')
+bt.report()
 ```
 
-这就是全部。数据获取、回测执行、绩效计算、基准对比、图表可视化，一行搞定。
+---
 
 ## 安装
 
 ```bash
-# 推荐 — 用 uv
-uv add qka
-
-# 或
 pip install qka
 ```
 
+需要 Python 3.10+。
+
 ## 快速上手
 
-### 1. 拿数据
+### 数据
 
 ```python
-import qka
+from qka import Data
 
-data = qka.Data(
+data = Data(
     symbols=['000001.SZ', '600000.SH'],
-    period='1d',
-    adjust='qfq'
+    indicators={'sma_5': ('sma', 5), 'rsi_14': ('rsi', 14)},
 )
-df = data.get()
+df = data.get()  # 触发下载，返回宽表 DataFrame
 ```
 
-### 2. 写策略
+### 策略
 
 ```python
-class MyStrategy(qka.Strategy):
-    def on_bar(self, date, get):
-        close = get('close')
-        # 价格低于10元买入1000股（注意前复权可能导致早期价格为负）
-        if '000001.SZ' in close and 0 < close['000001.SZ'] < 10:
-            self.broker.buy('000001.SZ', close['000001.SZ'], 1000)
+from qka import Strategy
+
+class MyStrategy(Strategy):
+    def __init__(self, cash=100_000):
+        super().__init__(cash=cash)
+        # 自定义状态放这里
+
+    def on_bar(self, date):
+        close = self.get('close')
+        hist = self.history('close', 20)
+        # 写你的交易逻辑
 ```
 
-### 3. 跑回测 + 看报告
+### 回测
 
 ```python
-bt = qka.Backtest(data, MyStrategy())
-bt.run(benchmark='000300.SH')          # 自动获取沪深300做基准对比
-bt.report(title='我的策略')            # 一键生成HTML报告
-```
+from qka import Backtest
 
-生成的 HTML 报告包含：
-- 📊 净值曲线 + 基准对比（交互式 Plotly 图表）
-- 📉 回撤曲线
-- 📅 月度收益率热力图
-- 📋 交易明细（含手续费）
-- 🏆 绩效指标：年化收益、夏普比率、最大回撤、胜率、盈亏比……
-
-### 4. 调整成本参数
-
-```python
-bt = qka.Backtest(
-    data, strategy,
-    commission_rate=0.0003,      # 佣金万分之三
-    stamp_duty_rate=0.001,       # 印花税千分之一
-    slippage=0.001               # 滑点 0.1%
-)
+bt = Backtest(data, MyStrategy(cash=100_000))
 bt.run(benchmark='000300.SH')
+print(bt.summary())    # 输出绩效指标
+bt.report()            # 生成 HTML 报告
 ```
 
-> 💡 详细教程 👉 [qka.quantai.chat](https://qka.quantai.chat)
+### 更多示例
 
-## 特性一览
-
-| 特性 | 说明 |
+| 策略 | 说明 |
 |------|------|
-| 🚀 **极简 API** | 统一的 `Data`/`Strategy`/`Backtest` 三件套，上手零门槛 |
-| 📊 **A 股数据** | 基于 Akshare，覆盖全市场 A 股数据 |
-| ⚡ **并发下载** | 多线程批量拉数据，几百只股票秒级完成 |
-| 🔄 **高效回测** | 时间序列引擎，天然支持多股票横截面处理 |
-| 📈 **HTML 报告** | 一键生成自包含的交互式回测报告，浏览器直接打开 |
-| 📉 **基准对比** | 自动获取沪深300做基准，曲线叠加展示 |
-| 💰 **成本模型** | 佣金/印花税/滑点全支持，贴近实盘 |
-| 🔧 **模块化** | 核心、经纪商、MCP、Server 各模块可独立使用 |
-| 📝 **文档完善** | [qka.quantai.chat](https://qka.quantai.chat) |
+| [买入持有与定投](https://qka.quantai.chat/examples/buy_and_hold/) | 买入不动 + 每月定投 |
+| [均线交叉](https://qka.quantai.chat/examples/ma_cross/) | 5日线上穿/下穿20日线 |
+| [RSI + ATR 风控](https://qka.quantai.chat/examples/rsi_atr/) | RSI 超卖买入，ATR 止损 |
+| [动量排序选股](https://qka.quantai.chat/examples/momentum/) | 月度动量排序，Top 5 等权 |
+| [多因子打分](https://qka.quantai.chat/examples/multi_factor/) | PE/ROE/动量/波动率打分选股 |
 
-## 核心模块
+## 核心能力
 
-### Data — 数据获取
-多数据源、自动缓存、并发下载、统一格式。支持日线/分钟线，前复权/后复权。
+- **多数据源** — baostock（默认）、akshare、QMT，自动缓存
+- **预计算指标** — sma/ema/macd/rsi/bbands/atr + 自定义因子
+- **事件驱动回测** — 按日推进，`self.get()` 横截面 + `self.history()` 窗口序列
+- **仓位管理** — `self.sizing.percent()` / `self.sizing.fixed_amount()` / `self.sizing.fixed_shares()` / `self.sizing.atr_risk()`
+- **交易模拟** — 佣金万2.5、印花税万5、滑点0.1%，最低佣金5元
+- **HTML 报告** — Plotly 交互图表，累计收益、回撤、月度热力图、交易明细
+- **基准对比** — 自动下载沪深300（或指定指数）做对比
 
-### Strategy — 策略编写
-事件驱动框架，在 `on_bar` 里写你的交易逻辑，`get()` 拿到当前截面数据做决策。
+## 文档
 
-### Backtest — 回测引擎
-时间序列驱动，支持多资产、成本模型、基准对比。`run()` 执行，`report()` 出报告，`summary()` 打印绩效指标。
-
-### Brokers — 实盘交易（建设中）
-集成 QMT 接口，客户端/服务器架构，支持远程交易。
-
-## 文档站
-
-完整文档、API 参考、最佳实践：
+完整教程、API 参考、示例代码：
 
 👉 **[qka.quantai.chat](https://qka.quantai.chat)**
+
+## 下一步规划
+
+- [ ] 分钟级数据支持
+- [ ] 自适应参数优化
+- [ ] 实盘交易（QMT 接口）
 
 ## 许可证
 
@@ -135,11 +126,11 @@ bt.run(benchmark='000300.SH')
 
 ## 致谢
 
-- [Akshare](https://github.com/akfamily/akshare) — 免费 A 股数据源
+- [baostock](http://baostock.com) — 免费 A 股数据
+- [Akshare](https://github.com/akfamily/akshare) — 补充数据源
 - [Plotly](https://plotly.com/python/) — 交互式图表
-- [FastAPI](https://fastapi.tiangolo.com/) — API 框架
-- [xtquant](https://github.com/ShiMiaoYS/xtquant) — QMT Python 接口
+- [xtquant](https://github.com/ShiMiaoYS/xtquant) — QMT 接口
 
 ---
 
-> ⚠️ 量化交易存在风险，请充分了解风险后再使用本框架。作者不对任何投资损失负责。
+> ⚠️ 量化交易存在风险，请充分了解后再使用本框架。

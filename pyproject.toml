@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "qka"
 dynamic = ["version"]
-description = "快捷量化助手（Quick Quantitative Assistant）- 简洁易用的A股量化交易框架"
+description = "QKA（快量化 / Quant Kit for A-shares）- 简洁易用的 A 股量化回测框架"
 authors = [{name = "myc", email = "mayuanchi1029@gmail.com"}]
 readme = "README.md"
 license = {file = "LICENSE"}
