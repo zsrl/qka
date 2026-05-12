@@ -1,4 +1,4 @@
-# QKA — Quick Quantitative Assistant
+# QKA — Quant Kit for A-shares
 
 <p align="center">
   <a href="https://qka.quantai.chat" target="_blank">
@@ -15,7 +15,7 @@
   </a>
 </p>
 
-**QKA（Quick Quantitative Assistant）** — 简洁易用的 A 股量化交易回测框架。
+**QKA（Quant Kit for A-shares）** — 简洁易用的 A 股量化回测框架。
 
 ```python
 from qka import Data, Strategy, Backtest

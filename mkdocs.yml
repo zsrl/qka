@@ -1,5 +1,5 @@
 site_name: QKA - 快量化文档
-site_description: 快捷量化助手（Quick Quantitative Assistant）- 简洁易用的A股量化交易框架
+site_description: QKA（Quant Kit for A-shares）- 简洁易用的 A 股量化回测框架
 site_author: QKA Team
 site_url: https://qka.quantai.chat
 use_directory_urls: true
