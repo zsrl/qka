@@ -1,3 +1,25 @@
+<!-- AUTO: API 签名 -->
+
+### Backtest
+
+### `Backtest(**data**, **strategy**)`
+
+    初始化回测引擎
+
+### `Backtest.run(**benchmark** `Optional[str]` = None) → `None。回测结果保存在 self.results 中，可通过``
+
+    执行回测 遍历所有时间点，在每个时间点调用策略的on_bar方法进行交易决策， 并记录交易后的状态。 大规模回测（>500 bar）时自动使用分区迭代，分块加载数据到内存， 避免一次性加载全量数据。
+
+### `Backtest.summary() → `dict``
+
+    计算并打印回测绩效指标 返回包含以下指标的字典： - 总收益率、年化收益率、年化波动率 - 夏普比率、最大回撤、Calmar比率 - 胜率、盈亏比、交易次数 - 最终资产、总手续费
+
+### `Backtest.report(**title** `str` = '未命名策略', **output_path** `Optional[str]` = None) → `str``
+
+    生成自包含的 HTML 回测报告 包含绩效指标卡片、净值曲线、回撤曲线、月度收益率热力图、 交易明细表和回撤分析。可直接在浏览器中打开。
+
+<!-- /AUTO -->
+
 # Backtest 模块
 
 回测引擎，管理策略生命周期和数据加载流程。

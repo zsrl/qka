@@ -1,3 +1,44 @@
+<!-- AUTO: API 签名 -->
+
+### Strategy
+
+### `Strategy(**cash** `float` = 100000.0)`
+
+    初始化策略
+
+### `Strategy.get(**factor** `str`) → `pd.Series，index=股票代码，values=最新值``
+
+    获取当前 bar 的横截面数据。 替代旧的 on_bar(date, get) 中的 get 参数。 仅当 on_bar 通过 self._data 注入数据后才能使用。
+
+### `Strategy.history(**factor** `str`, **window** `int` = 20) → `pd.DataFrame，行=日期，列=股票代码``
+
+    获取因子的历史窗口数据。
+
+### `Strategy.on_bar(**date**)`
+
+    每个 bar 的处理逻辑，必须由子类实现。 使用 self.get(factor) / self.history(factor, window) 获取数据。 --- 用法 --- class MyStrategy(Strategy): def on_bar(self, date): # 横截面数据（当前 bar 所有股票） close = self.get('close') # 历史序列（过去 N...
+
+### DataAccessor
+
+### `DataAccessor(**max_window** `int` = 250)`
+### `DataAccessor.push(**date**, **factor** `str`, **data** `dict`)`
+
+    推入一个因子在某天的横截面数据。
+
+### `DataAccessor.get(**factor** `str`) → `pd.Series``
+
+    获取当前 bar 的横截面数据。
+
+### `DataAccessor.history(**factor** `str`, **window** `int` = 20) → `pd.DataFrame``
+
+    获取因子的历史窗口数据。
+
+### `DataAccessor.clear()`
+
+    清空所有缓存（分区切换时使用）
+
+<!-- /AUTO -->
+
 # Strategy 模块
 
 策略编写核心。

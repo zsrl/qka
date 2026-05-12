@@ -1,3 +1,30 @@
+<!-- AUTO: API 签名 -->
+
+### SizingAccessor
+
+### `SizingAccessor(**broker**)`
+### `SizingAccessor.fixed_shares(**n** `int`) → `int``
+
+    固定股数。 如果 n 不足一手（100股），返回 0。
+
+### `SizingAccessor.fixed_amount(**amount** `float`, **price** `float`) → `int``
+
+    固定金额。 计算 amount 能买多少股，向下按手取整。
+
+### `SizingAccessor.percent(**ratio** `float`, **price** `float`) → `int``
+
+    资金百分比。 使用可用现金的 ratio 比例买入，按手取整。
+
+### `SizingAccessor.atr_risk(**risk_ratio** `float`, **price** `float`, **atr_value** `float`, **multiplier** `float` = 2.0) → `int``
+
+    ATR 风险仓位。 基于 ATR（平均真实波幅）计算仓位，确保单笔亏损不超过 risk_ratio 比例。 公式：股数 = (cash * risk_ratio) / (atr_value * multiplier)
+
+### `SizingAccessor.kelly(**win_rate** `float`, **win_loss_ratio** `float`, **price** `float`) → `int``
+
+    凯利公式。 f* = (p * b - q) / b 其中： - p = 胜率 - b = 赔率（盈利/亏损） - q = 1 - p（败率） 当 f* ≤ 0 时返回 0（不建议下注）。
+
+<!-- /AUTO -->
+
 # Sizing 模块
 
 仓位计算工具。在策略中通过 `self.sizing` 访问。

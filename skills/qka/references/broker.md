@@ -1,3 +1,29 @@
+<!-- AUTO: API 签名 -->
+
+### Broker
+
+### `Broker(**initial_cash** = 100000.0, **commission_rate** = DEFAULT_COMMISSION_RATE, **stamp_duty_rate** = DEFAULT_STAMP_DUTY_RATE, **slippage** = DEFAULT_SLIPPAGE)`
+
+    初始化Broker
+
+### `Broker.on_bar(**date**, **get**)`
+
+    Bar结束时记录当前状态。
+
+### `Broker.buy(**symbol** `str`, **price** `float`, **size** `int`) → `bool``
+
+    买入操作 考虑滑点（买入价上移）和佣金（最低 5 元）。
+
+### `Broker.sell(**symbol** `str`, **price** `float`, **size** `int`) → `bool``
+
+    卖出操作 考虑滑点（卖出价下移）、佣金（最低 5 元）和印花税。
+
+### `Broker.get(**factor** `str`, **timestamp** = None) → `Any``
+
+    从trades DataFrame中获取数据
+
+<!-- /AUTO -->
+
 # Broker 模块
 
 虚拟交易经纪商，管理资金、持仓和费用。

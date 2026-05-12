@@ -1,3 +1,17 @@
+<!-- AUTO: API 签名 -->
+
+### Data
+
+### `Data(**symbols** `Optional[List[str]]` = None, **period** `str` = '1d', **adjust** `str` = 'qfq', **source** `str` = 'baostock', **pool_size** `int` = 10, **datadir** `Optional[Path]` = None, **indicators** `Optional[dict]` = None)`
+
+    初始化数据对象
+
+### `Data.get(**lazy** `bool` = False) → `lazy=False: pd.DataFrame，列名格式 {symbol}|{factor}``
+
+    获取历史数据。 并发下载所有股票数据，应用因子计算，并返回合并后的数据。
+
+<!-- /AUTO -->
+
 # Data 模块
 
 数据获取、缓存和指标预计算。
