@@ -108,32 +108,63 @@ class Data():
 
     def _download(self, symbol: str) -> Path:
         """
-        下载单个股票的数据
-        
+        下载或更新单个股票的数据。
+
+        首次下载全量数据。已存在时只增量拉取最新数据（从 parquet 最后日期到今日），
+        追加合并后重新写入，确保缓存始终保持最新。
+
         Args:
-            symbol (str): 股票代码
-            
+            symbol: 股票代码
+
         Returns:
             Path: 数据文件路径
+
+        Raises:
+            RuntimeError: 数据源返回空数据（首次下载时）
         """
         path = self.target_dir / f"{symbol}.parquet"
 
-        if path.exists():
-             return path
+        # ── 首次下载：全量 ──
+        if not path.exists():
+            if self.source == 'akshare':
+                df = self._get_from_akshare(symbol)
+            elif self.source == 'baostock':
+                df = self._get_from_baostock(symbol)
+            else:
+                df = pd.DataFrame()
 
-        if self.source == 'akshare':
-            df = self._get_from_akshare(symbol)
-        elif self.source == 'baostock':
-            df = self._get_from_baostock(symbol)
-        else:
-            df = pd.DataFrame()
+            if len(df) == 0:
+                raise RuntimeError(f"{symbol}: baostock 返回空数据")
+            table = pa.Table.from_pandas(df)
+            pq.write_table(table, path)
+            return path
 
-        if len(df) == 0:
-            raise RuntimeError(f"{symbol}: baostock 返回空数据")
+        # ── 增量更新 ──
+        if self.source != 'baostock':
+            return path  # 仅 baostock 支持增量
 
-        table = pa.Table.from_pandas(df)
+        # 读已有数据的最后日期
+        existing = pd.read_parquet(path)
+        if not isinstance(existing.index, pd.DatetimeIndex):
+            return path  # 非日期索引，跳过增量（保持原文件不变）
+        last_date = existing.index.max()
+        today_str = pd.Timestamp.now().strftime("%Y-%m-%d")
+        next_date = (last_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+
+        if next_date > today_str:
+            return path  # 已是最新
+
+        df_new = self._get_from_baostock(symbol, start_date=next_date)
+        if len(df_new) == 0:
+            return path  # 没有新数据（交易日还未到）
+
+        # 合并去重
+        combined = pd.concat([existing, df_new])
+        combined = combined[~combined.index.duplicated(keep='last')]
+        combined = combined.sort_index()
+
+        table = pa.Table.from_pandas(combined)
         pq.write_table(table, path)
-
         return path
 
     def get(self, lazy: bool = False):
@@ -459,12 +490,18 @@ class Data():
         # 设置索引
         return df
 
-    def _get_from_baostock(self, symbol: str) -> pd.DataFrame:
+    def _get_from_baostock(
+        self, symbol: str,
+        start_date: str = '1990-01-01',
+        end_date: str = '2050-12-31',
+    ) -> pd.DataFrame:
         """
         从 baostock 获取单个股票的数据。
 
         Args:
-            symbol (str): 股票代码，支持带后缀如 000001.SZ 或 600000.SH
+            symbol: 股票代码，支持带后缀如 000001.SZ 或 600000.SH
+            start_date: 起始日期，格式 YYYY-MM-DD，默认 1990-01-01
+            end_date: 截止日期，格式 YYYY-MM-DD，默认 2050-12-31
 
         Returns:
             pd.DataFrame: 股票数据，以 date 为索引，包含 open, high, low, close, volume, amount 列
@@ -481,8 +518,8 @@ class Data():
         rs = bs.query_history_k_data_plus(
             bs_code,
             "date,open,high,low,close,volume,amount",
-            start_date='1990-01-01',
-            end_date='2050-12-31',
+            start_date=start_date,
+            end_date=end_date,
             frequency='d',
             adjustflag=adjustflag,
         )
