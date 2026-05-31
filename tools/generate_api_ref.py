@@ -18,17 +18,18 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 QKA_CORE = Path(__file__).resolve().parent.parent / "qka" / "core"
-SKILLS_REF = Path(__file__).resolve().parent.parent / "skills" / "qka" / "references"
+SKILLS_REF = Path(__file__).resolve().parent.parent / "skills" / "qka"
+SKILL_MD = SKILLS_REF / "SKILL.md"
 
-# 文件映射：模块名 → 对应的 reference 文件名
+# 文件映射：模块名 → SKILL.md 中对应的 section 标题
 MODULE_REF_MAP = {
-    "data.py": "data.md",
-    "strategy.py": "strategy.md",
-    "broker.py": "broker.md",
-    "sizing.py": "sizing.md",
-    "backtest.py": "backtest.md",
+    "data.py": "Data 模块",
+    "strategy.py": "Strategy 模块",
+    "broker.py": "Broker 模块",
+    "sizing.py": "Sizing 模块",
+    "backtest.py": "Backtest 模块",
     "report.py": None,  # report 无类，全手写
-    "accessor.py": "strategy.md",  # DataAccessor 合到 strategy 里
+    "accessor.py": "Strategy 模块",  # DataAccessor 合到 strategy 里
 }
 
 
@@ -169,32 +170,73 @@ def scan_module(filepath: Path) -> str:
     return "\n".join(lines)
 
 
-def update_reference_file(ref_path: Path, new_auto_content: str) -> bool:
-    """更新 reference 文件的 AUTO 区，保留手写内容"""
-    if not ref_path.exists():
-        with open(ref_path, "w", encoding="utf-8") as f:
-            f.write(new_auto_content + "\n\n<!-- 手写内容：示例、反例、A股规则 -->\n")
-        return True
-
-    with open(ref_path, "r", encoding="utf-8") as f:
+def update_skill_section(skill_path: Path, section_title: str, new_auto_block: str) -> bool:
+    """更新 SKILL.md 中某个 section 的 AUTO 区，保留手写内容"""
+    with open(skill_path, "r", encoding="utf-8") as f:
         content = f.read()
 
-    auto_pattern = r"<!-- AUTO: API 签名 -->.*?<!-- /AUTO -->"
-    if re.search(auto_pattern, content, re.DOTALL):
+    # 匹配：<!-- AUTO --> 后面跟着直到 section_title 之前的内容
+    # 然后匹配完整的 AUTO 块
+    pattern = (
+        r"(<!-- AUTO: API 签名 -->\n)"
+        r"(.*?)"
+        r"(<!-- /AUTO -->\n)"
+        r"(?=\n#+ " + re.escape(section_title) + r")"
+    )
+
+    # fallback: 如果没紧挨标题，尝试更宽松匹配
+    if not re.search(pattern, content, re.DOTALL):
+        pattern = (
+            r"(<!-- AUTO: API 签名 -->\n)"
+            r"(.*?)"
+            r"(<!-- /AUTO -->)"
+        )
+
+    if not re.search(pattern, content, re.DOTALL):
+        # 文件无 AUTO 块，直接追加
+        with open(skill_path, "a", encoding="utf-8") as f:
+            f.write("\n" + new_auto_block + "\n")
+        return True
+
+    # 找到该 section 对应的 AUTO 块位置
+    # 策略：找到 "section_title" 在文件中的位置，往前找最近的 AUTO 块
+    section_pos = content.find("\n# " + section_title)
+    if section_pos < 0:
+        section_pos = content.find("\n## " + section_title)
+
+    if section_pos >= 0:
+        # 在 section_pos 之前找最近的 AUTO 块
+        prefix = content[:section_pos]
+        all_auto = list(re.finditer(r"<!-- AUTO: API 签名 -->.*?<!-- /AUTO -->", prefix, re.DOTALL))
+        if all_auto:
+            # 取最后一个（最接近 section）
+            target = all_auto[-1]
+            new_content = (
+                content[:target.start()]
+                + new_auto_block.strip()
+                + content[target.end():]
+            )
+        else:
+            # section 之前没有 AUTO 块，在 section 前插入
+            new_content = (
+                content[:section_pos]
+                + "\n" + new_auto_block.strip() + "\n"
+                + content[section_pos:]
+            )
+    else:
+        # 找不到 section，用第一个 AUTO 块
         new_content = re.sub(
-            auto_pattern,
-            new_auto_content.strip(),
+            r"<!-- AUTO: API 签名 -->.*?<!-- /AUTO -->",
+            new_auto_block.strip(),
             content,
             count=1,
             flags=re.DOTALL,
         )
-    else:
-        new_content = new_auto_content + "\n\n" + content
 
     if new_content == content:
         return False
 
-    with open(ref_path, "w", encoding="utf-8") as f:
+    with open(skill_path, "w", encoding="utf-8") as f:
         f.write(new_content)
     return True
 
@@ -202,18 +244,16 @@ def update_reference_file(ref_path: Path, new_auto_content: str) -> bool:
 def main():
     os.makedirs(SKILLS_REF, exist_ok=True)
 
-    # 按 ref_file 分组，一个 reference 文件可能有多个源文件
+    # 按 section 分组，一个 section 可能有多个源文件
     groups: Dict[str, list] = {}
-    for py_file, ref_file in MODULE_REF_MAP.items():
-        if ref_file is None:
+    for py_file, section_title in MODULE_REF_MAP.items():
+        if section_title is None:
             continue
-        groups.setdefault(ref_file, []).append(py_file)
+        groups.setdefault(section_title, []).append(py_file)
 
     updated = []
 
-    for ref_file, py_files in groups.items():
-        ref_path = SKILLS_REF / ref_file
-
+    for section_title, py_files in groups.items():
         # 合并所有源文件的内容
         all_contents = []
 
@@ -223,7 +263,7 @@ def main():
                 print(f"[SKIP] 不存在: {src_path}")
                 continue
 
-            print(f"[SCAN] {py_file} → {ref_file}")
+            print(f"[SCAN] {py_file} → SKILL.md ({section_title})")
             new_auto = scan_module(src_path)
 
             # 去掉 AUTO 包裹标签，只取中间内容
@@ -237,7 +277,7 @@ def main():
                 all_contents.append(inner)
 
         if not all_contents:
-            print(f"[SKIP] {ref_file} 无内容可生成")
+            print(f"[SKIP] {section_title} 无内容可生成")
             continue
 
         # 拼装最终 AUTO 区
@@ -245,17 +285,17 @@ def main():
         combined += "\n\n".join(all_contents)
         combined += "\n\n<!-- /AUTO -->"
 
-        if update_reference_file(ref_path, combined):
-            updated.append(ref_file)
-            print(f"   [UPDATED] {ref_file}")
+        if update_skill_section(SKILL_MD, section_title, combined):
+            updated.append(section_title)
+            print(f"   [UPDATED] {section_title}")
         else:
-            print(f"   [SAME] {ref_file}")
+            print(f"   [SAME] {section_title}")
 
     if updated:
-        print(f"\n[DONE] 更新了 {len(updated)} 个文件: {', '.join(updated)}")
+        print(f"\n[DONE] 更新了 {len(updated)} 个 section: {', '.join(updated)}")
         print("[WARN] 记得检查 git diff 后一起提交")
     else:
-        print("\n[DONE] 所有文件已是最新，无需更新")
+        print("\n[DONE] 所有 section 已是最新，无需更新")
 
 
 if __name__ == "__main__":
