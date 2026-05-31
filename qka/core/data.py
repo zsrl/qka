@@ -507,8 +507,21 @@ class Data():
             pd.DataFrame: 股票数据，以 date 为索引，包含 open, high, low, close, volume, amount 列
         """
         # baostock 代码格式：sz.000001 / sh.600000
-        exchange = symbol[-2:].lower()  # 'sz', 'sh', 'bj'
-        code = symbol.split('.')[0]  # '000001'
+        # 支持两种输入格式：
+        #   - 000001.SZ → code=000001, exchange=sz
+        #   - sz.000001 → code=000001, exchange=sz
+        parts = symbol.split('.')
+        if len(parts) == 2:
+            left, right = parts
+            if left.isdigit():
+                # 格式: 000001.SZ
+                code, exchange = left, right.lower()
+            else:
+                # 格式: sz.000001
+                code, exchange = right, left.lower()
+        else:
+            # 兜底：无后缀，直接当作代码
+            code, exchange = symbol, 'sh'
         bs_code = f"{exchange}.{code}"
 
         # adjustflag: 1=不复权, 2=前复权, 3=后复权
