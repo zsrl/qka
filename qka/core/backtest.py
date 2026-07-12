@@ -9,6 +9,9 @@ import numpy as np
 import dask.dataframe as dd
 from typing import Optional, Union
 from collections import defaultdict
+from qka.core.broker import Broker
+from qka.core.accessor import DataAccessor
+from qka.core.sizing import SizingAccessor
 
 
 class Backtest:
@@ -36,8 +39,19 @@ class Backtest:
         self.data = data
         self.strategy = strategy
         self.results = None
-        self.initial_cash = strategy.broker.cash
+        self.initial_cash = None  # 由 run() 设置
+        self.metrics = None
         self._benchmark_data = None
+
+    @property
+    def trade_history(self):
+        """逐笔交易明细（list[dict]）"""
+        return self.strategy.broker.trade_history if hasattr(self.strategy, 'broker') else []
+
+    @property
+    def trades(self):
+        """每日资金/市值/持仓快照（pd.DataFrame）"""
+        return self.strategy.broker.trades if hasattr(self.strategy, 'broker') else pd.DataFrame()
 
     @staticmethod
     def _parse_row(row):
@@ -63,7 +77,9 @@ class Backtest:
             by_factor[factor][symbol] = val
         return dict(by_factor)
 
-    def run(self, benchmark: Optional[str] = None):
+    def run(self, cash: float = 100000.0,
+            start_date: str = None, end_date: str = None,
+            benchmark: Optional[str] = None):
         """
         执行回测
 
@@ -74,15 +90,23 @@ class Backtest:
         避免一次性加载全量数据。
 
         Args:
-            benchmark (str, optional): 基准代码，如 '000300.SH'（沪深300）。
-                                       如果提供，会下载基准数据用于对比。
+            cash: 初始资金，默认 10 万元
+            start_date: 回测起始日期 YYYY-MM-DD，None 表示数据最早日期
+            end_date: 回测截止日期 YYYY-MM-DD，None 表示数据最晚日期
+            benchmark: 基准代码，如 '000300.SH'（沪深300）。
+                       如果提供，会下载基准数据用于对比。
 
         Returns:
-            None。回测结果保存在 self.results 中，可通过
-            self.summary() 查看绩效指标，self.report() 生成报告。
+            None。回测结果保存在 self.results、self.metrics、self.trade_history 中。
         """
-        # 获取数据（优先用 lazy 模式，由 Backtest 决定是否分区）
-        raw = self.data.get(lazy=True)
+        # 注入基础设施
+        self.initial_cash = cash
+        self.strategy.broker = Broker(initial_cash=cash)
+        self.strategy.sizing = SizingAccessor(self.strategy.broker)
+        self.strategy._data = DataAccessor()
+
+        # 获取数据
+        raw = self.data.get(lazy=True, start_date=start_date, end_date=end_date)
 
         # 加载基准数据
         if benchmark:
@@ -137,6 +161,7 @@ class Backtest:
 
         # 保存回测结果
         self.results = self.strategy.broker.trades
+        self.metrics = self._compute_metrics()
 
     def _load_benchmark(self, benchmark_code: str):
         """
@@ -158,26 +183,13 @@ class Backtest:
         except Exception as e:
             print(f"基准数据加载失败: {e}")
 
-    def summary(self) -> dict:
-        """
-        计算并打印回测绩效指标
-
-        返回包含以下指标的字典：
-        - 总收益率、年化收益率、年化波动率
-        - 夏普比率、最大回撤、Calmar比率
-        - 胜率、盈亏比、交易次数
-        - 最终资产、总手续费
-
-        Returns:
-            dict: 绩效指标字典
-        """
+    def _compute_metrics(self) -> dict:
+        """计算绩效指标。无数据时返回空 dict。"""
         if self.results is None or self.results.empty:
-            print("请先运行回测 (backtest.run())")
             return {}
 
         totals = self.results['total']
         if len(totals) < 2:
-            print("回测数据不足（至少需要2个交易周期）")
             return {}
 
         # 基本数据
@@ -192,7 +204,6 @@ class Backtest:
         # 日收益率序列
         daily_returns = totals.pct_change().dropna()
         if len(daily_returns) == 0:
-            print("没有足够的收益率数据")
             return {}
 
         # 年化收益率
@@ -257,29 +268,9 @@ class Backtest:
         else:
             win_rate = 0
             profit_loss_ratio = 0
-            trade_pnl = []
 
         # 总手续费
         total_commission = self.strategy.broker.total_commission
-
-        # 打印报告
-        print("=" * 55)
-        print("           回测绩效报告")
-        print("=" * 55)
-        print(f"  初始资金:        RMB {initial:>10,.2f}")
-        print(f"  最终资产:        RMB {final:>10,.2f}")
-        print(f"  总收益率:         {total_return:>+8.2f}%")
-        print(f"  年化收益率:       {annual_return * 100:>+8.2f}%")
-        print(f"  年化波动率:       {annual_vol * 100:>8.2f}%")
-        print(f"  夏普比率:         {sharpe:>8.2f}")
-        print(f"  最大回撤:         {max_drawdown:>8.2f}%")
-        print(f"  Calmar比率:       {calmar:>8.2f}")
-        print(f"  交易次数:         {n_trades:>8}")
-        print(f"  胜率:             {win_rate:>8.2f}%")
-        print(f"  盈亏比:           {profit_loss_ratio:>8.2f}")
-        print(f"  总手续费:         RMB {total_commission:>10,.2f}")
-        print(f"  回测天数:         {n_days:>8} 天")
-        print("=" * 55)
 
         return {
             'initial_cash': initial,

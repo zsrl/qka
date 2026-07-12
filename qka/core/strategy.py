@@ -5,9 +5,7 @@ QKA策略模块
 """
 
 from abc import ABC, abstractmethod
-from qka.core.broker import Broker
-from qka.core.accessor import DataAccessor
-from qka.core.sizing import SizingAccessor
+import pandas as pd
 
 
 class Strategy(ABC):
@@ -16,29 +14,29 @@ class Strategy(ABC):
 
     所有自定义策略都应该继承此类，并实现 on_bar 方法。
 
+    broker / sizing / _data 由 Backtest.run() 在执行时注入，
+    策略本身不需要在 __init__ 中创建它们。
+
     Attributes:
-        broker (Broker): 交易经纪商实例，用于执行交易操作
-        sizing (SizingAccessor): 仓位计算工具，提供 self.sizing.percent() 等方法
-        _data (DataAccessor): 数据访问器，提供 self.get() 和 self.history() 接口
+        broker (Broker): 交易经纪商实例，由 Backtest 注入
+        sizing (SizingAccessor): 仓位计算工具，由 Backtest 注入
+        _data (DataAccessor): 数据访问器，由 Backtest 注入
     """
 
-    def __init__(self, cash: float = 100000.0):
+    def __init__(self):
         """
-        初始化策略
+        初始化策略。
 
-        Args:
-            cash: 初始资金，默认 10 万元
+        子类用 super().__init__() 调用即可，不需要传任何参数。
+        broker / sizing / _data 由 Backtest.run() 在执行时注入。
         """
-        self.broker = Broker(initial_cash=cash)
-        self.sizing = SizingAccessor(self.broker)
-        self._data = DataAccessor(max_window=750)
+        pass
 
     def get(self, factor: str):
         """
         获取当前 bar 的横截面数据。
 
-        替代旧的 on_bar(date, get) 中的 get 参数。
-        仅当 on_bar 通过 self._data 注入数据后才能使用。
+        仅当 Backtest.run() 注入 _data 后可用。
 
         Args:
             factor: 因子名，如 'close', 'volume'
@@ -67,25 +65,6 @@ class Strategy(ABC):
         每个 bar 的处理逻辑，必须由子类实现。
 
         使用 self.get(factor) / self.history(factor, window) 获取数据。
-
-        --- 用法 ---
-
-        class MyStrategy(Strategy):
-            def on_bar(self, date):
-                # 横截面数据（当前 bar 所有股票）
-                close = self.get('close')
-
-                # 历史序列（过去 N 天）
-                hist = self.history('close', 20)
-
-                # 仓位管理
-                size = self.sizing.percent(0.1, float(close['000001.SZ']))
-
-                # 交易操作
-                if not close.empty and '000001.SZ' in close.index:
-                    price = float(close['000001.SZ'])
-                    size = self.sizing.percent(0.1, price)
-                    self.broker.buy('000001.SZ', price, size)
 
         Args:
             date: 当前日期（pd.Timestamp）

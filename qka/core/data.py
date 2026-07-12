@@ -56,19 +56,21 @@ class Data():
             datadir: 缓存目录路径
             indicators: 预计算指标/因子，支持三种格式：
                 
-                **1. 字典（混搭 TA 指标和自定义因子）：**
+                **1. 字典（混搭 ta 函数和自定义因子）：**
                 ```python
                 {
-                    'sma_20': ('sma', 20),           # TA 指标：列名 → (指标名, *参数)
-                    'rsi_14': ('rsi', 14),
-                    'macd': ('macd', 12, 26, 9),
-                    'ma5': lambda df: df['close'].rolling(5).mean(),  # 自定义因子
+                    'sma_5':  ('ta.trend.sma_indicator', 'close', 5),
+                    'rsi_14': ('ta.momentum.rsi', 'close', 14),
+                    'macd':   ('ta.trend.macd_diff', 'close', 26, 12, 9),
+                    'atr_14': ('ta.volatility.average_true_range', 'high', 'low', 'close', 14),
+                    'ma5':    lambda df: df['close'].rolling(5).mean(),
                 }
                 ```
-                支持的 TA 指标：sma、ema、wma、rsi、macd、bbands、atr
-                factor 默认为 'close'，可指定：`('sma', 'high', 20)`
+                每个条目独立产一列，直接透传 ta 库全部指标。
+                列名参数（'close'/'high' 等）放在 ta 路径之后、数值参数之前；
+                多列函数（如 ATR）连续列出所有列名即可。
                 
-                **2. 函数（自定义因子，替代旧版 factor 参数）：**
+                **2. 函数（自定义因子）：**
                 ```python
                 indicators=lambda df: df.assign(ma5=df['close'].rolling(5).mean())
                 ```
@@ -167,7 +169,25 @@ class Data():
         pq.write_table(table, path)
         return path
 
-    def get(self, lazy: bool = False):
+    def _needs_download(self, symbol: str) -> bool:
+        """
+        判断股票是否需要网络下载（parquet 不存在，或 baostock 有增量数据）。
+        """
+        path = self.target_dir / f"{symbol}.parquet"
+        if not path.exists():
+            return True
+        if self.source != 'baostock':
+            return False
+        # baostock：检查是否已是最新
+        existing = pd.read_parquet(path)
+        if not isinstance(existing.index, pd.DatetimeIndex):
+            return False
+        last_date = existing.index.max()
+        today_str = pd.Timestamp.now().strftime("%Y-%m-%d")
+        next_date = (last_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        return next_date <= today_str
+
+    def get(self, lazy: bool = False, start_date: str = None, end_date: str = None):
         """
         获取历史数据。
 
@@ -176,26 +196,49 @@ class Data():
         Args:
             lazy: 是否以懒加载模式返回 dask DataFrame（支持大规模数据分区迭代）。
                   默认 False，返回 compute() 后的 pandas DataFrame（向后兼容）。
+            start_date: 起始日期，格式 YYYY-MM-DD。用于从缓存中截取数据范围，
+                        避免全量加载。传 None 表示从最早可用数据开始。
+            end_date: 截止日期，格式 YYYY-MM-DD。传 None 表示到最新可用数据。
 
         Returns:
             lazy=False: pd.DataFrame，列名格式 {symbol}|{factor}
             lazy=True: dd.DataFrame，列名格式 {symbol}|{factor}
             没有数据时抛出 RuntimeError
+
+        注意：有指标时，start_date 会自动向后扩展 max_window 个交易日读取缓存，
+        确保指标有足够的预热数据。最终返回的 DataFrame 仍严格限定在 [start_date, end_date]。
         """
         if not self.symbols:
             return pd.DataFrame()
 
-        # 缓存
-        if lazy:
-            if hasattr(self, '_cached_dask') and self._cached_dask is not None:
-                return self._cached_dask
-        else:
-            if hasattr(self, '_cached') and self._cached is not None:
-                return self._cached
+        # 计算指标预热窗口
+        max_window = self._min_rows_for_indicators()
 
-        # baostock 需要先登录，且其 C/S 架构不支持多线程并发
+        # 构建 parquet predicate pushdown 过滤（日期 + 指标预热扩展）
+        pq_filters = None
+        if start_date is not None or end_date is not None or max_window > 0:
+            pq_filters = []
+            read_start = None
+            if start_date is not None:
+                read_start = pd.Timestamp(start_date)
+            if max_window > 0:
+                if read_start is not None:
+                    # 向后扩展，确保指标有足够的预热数据
+                    read_start = read_start - pd.offsets.BDay(max_window * 2)
+                # 无 start_date 但有指标时，不需要扩展（从头读即可）
+            if read_start is not None:
+                pq_filters.append(('date', '>=', read_start))
+            if end_date is not None:
+                pq_filters.append(('date', '<=', pd.Timestamp(end_date)))
+            if not pq_filters:
+                pq_filters = None
+
+        # 筛选需要网络下载的股票
+        need_download = [s for s in self.symbols if self._needs_download(s)]
+
+        # 仅当有股票需要下载时才登录 baostock
         bs_logged_in = False
-        if self.source == 'baostock':
+        if need_download and self.source == 'baostock':
             lg = bs.login()
             if lg.error_code != '0':
                 raise RuntimeError(f"baostock 登录失败: {lg.error_msg}")
@@ -203,31 +246,30 @@ class Data():
 
         errors = []
         try:
-            if self.source == 'baostock':
-                # baostock 串行下载（C/S 架构不支持并发）
-                for symbol in tqdm(self.symbols, desc="下载数据"):
-                    try:
-                        self._download(symbol)
-                    except Exception as e:
-                        errors.append(f"{symbol}: {e}")
-                        print(f"\n[警告] 下载 {symbol} 失败: {e}")
-            else:
-                # 其他数据源（akshare 等）并发下载
-                with ThreadPoolExecutor(max_workers=self.pool_size) as executor:
-                    futures = {
-                        executor.submit(self._download, symbol): symbol
-                        for symbol in self.symbols
-                    }
-                    with tqdm(total=len(self.symbols), desc="下载数据") as pbar:
-                        for future in as_completed(futures):
-                            symbol = futures[future]
-                            try:
-                                future.result()
-                            except Exception as e:
-                                errors.append(f"{symbol}: {e}")
-                                print(f"\n[警告] 下载 {symbol} 失败: {e}")
-                            pbar.update(1)
-                            pbar.set_postfix_str(f"当前: {symbol}")
+            if need_download:
+                if self.source == 'baostock':
+                    for symbol in tqdm(need_download, desc="下载数据"):
+                        try:
+                            self._download(symbol)
+                        except Exception as e:
+                            errors.append(f"{symbol}: {e}")
+                            print(f"\n[警告] 下载 {symbol} 失败: {e}")
+                else:
+                    with ThreadPoolExecutor(max_workers=self.pool_size) as executor:
+                        futures = {
+                            executor.submit(self._download, symbol): symbol
+                            for symbol in need_download
+                        }
+                        with tqdm(total=len(need_download), desc="下载数据") as pbar:
+                            for future in as_completed(futures):
+                                symbol = futures[future]
+                                try:
+                                    future.result()
+                                except Exception as e:
+                                    errors.append(f"{symbol}: {e}")
+                                    print(f"\n[警告] 下载 {symbol} 失败: {e}")
+                                pbar.update(1)
+                                pbar.set_postfix_str(f"当前: {symbol}")
             if errors:
                 raise RuntimeError(
                     f"共 {len(errors)} 只股票下载失败:\n" +
@@ -245,7 +287,7 @@ class Data():
                 if not parquet_path.exists():
                     logger.warning(f"数据文件不存在，跳过: {parquet_path}")
                     continue
-                ddf = dd.read_parquet(str(parquet_path))
+                ddf = dd.read_parquet(str(parquet_path), filters=pq_filters)
                 ddf = self._apply_indicators(ddf)
                 column_mapping = {col: f'{symbol}|{col}' for col in ddf.columns}
                 dfs.append(ddf.rename(columns=column_mapping))
@@ -257,7 +299,9 @@ class Data():
                 )
 
             ddf = dd.concat(dfs, axis=1, join='outer')
-            self._cached_dask = ddf
+            # 切片回用户请求的日期范围（去掉指标预热扩展部分）
+            if start_date is not None and max_window > 0:
+                ddf = ddf[ddf.index >= pd.Timestamp(start_date)]
             return ddf
 
         else:
@@ -268,7 +312,7 @@ class Data():
                 if not parquet_path.exists():
                     logger.warning(f"数据文件不存在，跳过: {parquet_path}")
                     continue
-                df = dd.read_parquet(str(parquet_path))
+                df = dd.read_parquet(str(parquet_path), filters=pq_filters)
                 df = self._apply_indicators(df)
                 column_mapping = {col: f'{symbol}|{col}' for col in df.columns}
                 dfs.append(df.rename(columns=column_mapping))
@@ -280,21 +324,11 @@ class Data():
                 )
 
             ddf = dd.concat(dfs, axis=1, join='outer')
-            self._cached = ddf.compute()
-            return self._cached
-
-    def _apply_indicators(self, df: 'pd.DataFrame'):
-        """
-        对单只股票的数据计算预定义的技术指标。
-
-        Args:
-            df: 单只股票的 DataFrame
-
-        Returns:
-            DataFrame: 包含原始列和指标列
-        """
-        if not self.indicators:
-            return df
+            result = ddf.compute()
+            # 切片回用户请求的日期范围
+            if start_date is not None and max_window > 0:
+                result = result[result.index >= pd.Timestamp(start_date)]
+            return result
 
     def _apply_indicators(self, df):
         """
@@ -337,9 +371,8 @@ class Data():
 
     def _compute_indicator_cols(self, df):
         """在 pandas DataFrame 上计算指标/因子列（单只股票）。"""
-        import ta as _ta_lib
 
-        # 分区过小时跳过，避免 ta-lib（如 ATR window=14）在 dask meta 推断时崩溃
+        # 分区过小时跳过，避免 ta-lib 在 dask meta 推断时崩溃
         min_rows = self._min_rows_for_indicators()
         if len(df) < min_rows:
             return df
@@ -365,84 +398,64 @@ class Data():
             ind_type = spec[0]
             args = list(spec[1:])
 
-            # 如果第一个参数是字符串，视为自定义 factor 列名；否则默认为 'close'
-            factor = 'close'
-            rest = args
-            if args and isinstance(args[0], str):
-                factor = args[0]
-                rest = args[1:]
+            # 收集前面连续的字符串参数作为列名（遇到第一个非字符串即停）
+            factors = []
+            rest_start = 0
+            for i, arg in enumerate(args):
+                if isinstance(arg, str):
+                    factors.append(arg)
+                    rest_start = i + 1
+                else:
+                    break
+            if not factors:
+                logger.warning(f"指标 {col_name} 缺少计算列名，跳过")
+                continue
+            rest = args[rest_start:]
 
-            if ind_type == 'sma':
-                window = int(rest[0]) if rest else 20
-                df[col_name] = _ta_lib.trend.sma_indicator(df[factor], window=window)
+            # 动态解析 ta 函数路径：'ta.trend.sma_indicator' → 导入并调用
+            if not isinstance(ind_type, str) or '.' not in ind_type:
+                logger.warning(f"指标 {col_name} 的类型必须为 'ta.xxx.yyy' 格式，跳过: {ind_type}")
+                continue
 
-            elif ind_type == 'ema':
-                window = int(rest[0]) if rest else 30
-                df[col_name] = _ta_lib.trend.ema_indicator(df[factor], window=window)
+            import importlib
+            parts = ind_type.rsplit('.', 1)
+            if len(parts) != 2:
+                logger.warning(f"指标 {col_name} 类型格式错误: {ind_type}")
+                continue
+            module_name, func_name = parts
+            try:
+                mod = importlib.import_module(module_name)
+                fn = getattr(mod, func_name)
+            except (ImportError, AttributeError) as e:
+                logger.warning(f"无法加载指标函数 {ind_type}: {e}")
+                continue
 
-            elif ind_type == 'wma':
-                window = int(rest[0]) if rest else 30
-                df[col_name] = _ta_lib.trend.wma_indicator(df[factor], window=window)
-
-            elif ind_type == 'rsi':
-                window = int(rest[0]) if rest else 14
-                df[col_name] = _ta_lib.momentum.rsi(df[factor], window=window)
-
-            elif ind_type == 'macd':
-                fast = int(rest[0]) if len(rest) >= 1 else 12
-                slow = int(rest[1]) if len(rest) >= 2 else 26
-                signal = int(rest[2]) if len(rest) >= 3 else 9
-                _macd = _ta_lib.trend.MACD(
-                    df[factor], window_slow=slow, window_fast=fast, window_sign=signal,
-                )
-                df[col_name] = _macd.macd()
-                df[f'{col_name}_signal'] = _macd.macd_signal()
-                df[f'{col_name}_histogram'] = _macd.macd_diff()
-
-            elif ind_type == 'bbands':
-                window = int(rest[0]) if rest else 20
-                std = int(rest[1]) if len(rest) >= 2 else 2
-                _bb = _ta_lib.volatility.BollingerBands(
-                    df[factor], window=window, window_dev=std,
-                )
-                df[f'{col_name}_upper'] = _bb.bollinger_hband()
-                df[f'{col_name}_middle'] = _bb.bollinger_mavg()
-                df[f'{col_name}_lower'] = _bb.bollinger_lband()
-
-            elif ind_type == 'atr':
-                window = int(rest[0]) if rest else 14
-                df[col_name] = _ta_lib.volatility.average_true_range(
-                    df['high'], df['low'], df['close'], window=window,
-                )
-
+            if len(factors) == 1:
+                df[col_name] = fn(df[factors[0]], *rest)
             else:
-                logger.warning(f"未知指标类型: {ind_type}，跳过 {col_name}")
+                df[col_name] = fn(*[df[f] for f in factors], *rest)
 
         return df
 
     def _min_rows_for_indicators(self):
-        """计算所有指标所需的最小行数。"""
+        """计算所有指标所需的最小行数。
+
+        遍历所有指标条目的整数参数，取最大值作为窗口上限的保守估计。
+        """
         if not self._indicators or not isinstance(self._indicators, dict):
             return 0
         max_window = 0
         for spec in self._indicators.values():
             if callable(spec) or not isinstance(spec, (list, tuple)):
                 continue
-            args = list(spec[1:])
-            rest = args
-            if args and isinstance(args[0], str):
-                rest = args[1:]
-            ind_type = spec[0]
-            if ind_type in ('sma', 'ema', 'wma', 'rsi', 'atr'):
-                w = int(rest[0]) if rest else (30 if ind_type in ('ema', 'wma') else (20 if ind_type == 'sma' else 14))
-                max_window = max(max_window, w)
-            elif ind_type == 'bbands':
-                w = int(rest[0]) if rest else 20
-                max_window = max(max_window, w)
-            elif ind_type == 'macd':
-                fast = int(rest[0]) if len(rest) >= 1 else 12
-                slow = int(rest[1]) if len(rest) >= 2 else 26
-                max_window = max(max_window, fast, slow)
+            # spec[1:] 中跳过所有前导字符串（列名），收集剩余整数
+            rest = list(spec[1:])
+            idx = 0
+            while idx < len(rest) and isinstance(rest[idx], str):
+                idx += 1
+            for v in rest[idx:]:
+                if isinstance(v, int):
+                    max_window = max(max_window, v)
         return max_window
 
     def _get_from_akshare(self, symbol: str) -> pd.DataFrame:

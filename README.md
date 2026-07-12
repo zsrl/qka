@@ -2,9 +2,6 @@
 ## Quant Kit for A-shares
 
 <p align="center">
-  <a href="https://qka.quantai.chat" target="_blank">
-    <img src="https://img.shields.io/badge/文档站-qka.quantai.chat-blue?style=flat" alt="文档站">
-  </a>
   <a href="https://pypi.org/project/qka/">
     <img src="https://img.shields.io/pypi/v/qka?color=blue" alt="PyPI">
   </a>
@@ -21,20 +18,40 @@
 ```python
 from qka import Data, Strategy, Backtest
 
-class MyStrategy(Strategy):
+data = Data(
+    symbols=['000001.SZ'],
+    indicators={
+        'sma_5':  ('ta.trend.sma_indicator', 'close', 5),
+        'sma_20': ('ta.trend.sma_indicator', 'close', 20),
+    },
+)
+
+class MaCross(Strategy):
+    def __init__(self):
+        super().__init__()
+        self.pct = 0.2
+
     def on_bar(self, date):
         close = self.get('close')
+        fast = self.get('sma_5')
+        slow = self.get('sma_20')
         for sym in close.index:
-            if sym not in self.broker.positions:
-                price = float(close[sym])
-                if price > 0:
-                    size = self.sizing.percent(0.1, price)
-                    if size >= 100:
-                        self.broker.buy(sym, price, size)
+            price = float(close[sym])
+            if price <= 0:
+                continue
+            if fast[sym] > slow[sym]:
+                size = self.sizing.percent(self.pct, price)
+                if size > 0:
+                    self.broker.buy(sym, price, size)
+            else:
+                pos = self.broker.positions.get(sym, {}).get('size', 0)
+                if pos > 0:
+                    self.broker.sell(sym, price, pos)
 
-bt = Backtest(Data(['000001.SZ']), MyStrategy(cash=100_000))
-bt.run(benchmark='000300.SH')
-bt.report()
+strategy = MaCross()
+bt = Backtest(data, strategy)
+bt.run(cash=200000, start_date='2024-01-01')
+print(bt.metrics['total_return_pct'])
 ```
 
 ---
@@ -56,9 +73,12 @@ from qka import Data
 
 data = Data(
     symbols=['000001.SZ', '600000.SH'],
-    indicators={'sma_5': ('sma', 5), 'rsi_14': ('rsi', 14)},
+    indicators={
+        'sma_5':  ('ta.trend.sma_indicator', 'close', 5),
+        'rsi_14': ('ta.momentum.rsi', 'close', 14),
+    },
 )
-df = data.get()  # 触发下载，返回宽表 DataFrame
+df = data.get()  # 返回宽表 DataFrame，列名 {symbol}|{factor}
 ```
 
 ### 策略
@@ -67,14 +87,15 @@ df = data.get()  # 触发下载，返回宽表 DataFrame
 from qka import Strategy
 
 class MyStrategy(Strategy):
-    def __init__(self, cash=100_000):
-        super().__init__(cash=cash)
-        # 自定义状态放这里
+    def __init__(self):
+        super().__init__()
+        self.lookback = 20  # 自定义参数
 
     def on_bar(self, date):
-        close = self.get('close')
-        hist = self.history('close', 20)
-        # 写你的交易逻辑
+        close = self.get('close')            # 当前横截面
+        hist = self.history('close', 20)     # 历史窗口
+        # 交易逻辑：self.broker.buy / self.broker.sell
+        # 仓位计算：self.sizing.percent / self.sizing.fixed_shares
 ```
 
 ### 回测
@@ -82,37 +103,26 @@ class MyStrategy(Strategy):
 ```python
 from qka import Backtest
 
-bt = Backtest(data, MyStrategy(cash=100_000))
-bt.run(benchmark='000300.SH')
-print(bt.summary())    # 输出绩效指标
-bt.report()            # 生成 HTML 报告
+strategy = MyStrategy()
+bt = Backtest(data, strategy)
+bt.run(cash=200000, start_date='2024-01-01', benchmark='000300.SH')
+print(bt.metrics['total_return_pct'])   # 总收益率
+print(bt.metrics['sharpe_ratio'])        # 夏普比率
 ```
-
-### 更多示例
-
-| 策略 | 说明 |
-|------|------|
-| [买入持有与定投](https://qka.quantai.chat/examples/buy_and_hold/) | 买入不动 + 每月定投 |
-| [均线交叉](https://qka.quantai.chat/examples/ma_cross/) | 5日线上穿/下穿20日线 |
-| [RSI + ATR 风控](https://qka.quantai.chat/examples/rsi_atr/) | RSI 超卖买入，ATR 止损 |
-| [动量排序选股](https://qka.quantai.chat/examples/momentum/) | 月度动量排序，Top 5 等权 |
-| [多因子打分](https://qka.quantai.chat/examples/multi_factor/) | PE/ROE/动量/波动率打分选股 |
 
 ## 核心能力
 
-- **多数据源** — baostock（默认）、akshare、QMT，自动缓存
-- **预计算指标** — sma/ema/macd/rsi/bbands/atr + 自定义因子
+- **多数据源** — baostock（默认）、akshare、QMT
+- **预计算指标** — ta 库全部 60+ 指标，`('ta.trend.sma_indicator', 'close', 5)` 格式直接透传
 - **事件驱动回测** — 按日推进，`self.get()` 横截面 + `self.history()` 窗口序列
-- **仓位管理** — `self.sizing.percent()` / `self.sizing.fixed_amount()` / `self.sizing.fixed_shares()` / `self.sizing.atr_risk()`
-- **交易模拟** — 佣金万2.5、印花税万5、滑点0.1%，最低佣金5元
-- **HTML 报告** — Plotly 交互图表，累计收益、回撤、月度热力图、交易明细
-- **基准对比** — 自动下载沪深300（或指定指数）做对比
+- **仓位管理** — `sizing.percent()` / `sizing.fixed_amount()` / `sizing.fixed_shares()` / `sizing.atr_risk()`
+- **交易模拟** — 佣金万 2.5、印花税万 5（仅卖出）、滑点 0.1%，最低佣金 5 元
+- **绩效指标** — 总收益率、年化、夏普比率、最大回撤、Calmar、胜率、盈亏比等 13 项
+- **基准对比** — 支持沪深 300（或指定指数）对比
 
 ## 文档
 
-完整教程、API 参考、示例代码：
-
-👉 **[qka.quantai.chat](https://qka.quantai.chat)**
+框架 API 完整文档见 [skills/qka/SKILL.md](skills/qka/SKILL.md)——所有类的方法签名、参数、返回值和约束都在里面。
 
 ## 下一步规划
 
@@ -128,8 +138,7 @@ bt.report()            # 生成 HTML 报告
 
 - [baostock](http://baostock.com) — 免费 A 股数据
 - [Akshare](https://github.com/akfamily/akshare) — 补充数据源
-- [Plotly](https://plotly.com/python/) — 交互式图表
-- [xtquant](https://github.com/ShiMiaoYS/xtquant) — QMT 接口
+- [ta](https://github.com/bukosabino/ta) — 技术指标库
 
 ---
 

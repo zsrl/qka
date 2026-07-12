@@ -1,578 +1,526 @@
----
-name: qka
-description: >
-  QKA 框架使用技能。当用户需要基于 QKA 框架编写 A 股量化策略、运行回测、
-  处理股票数据、生成报告时使用。涵盖 QKA 全部核心 API 的使用方法。
----
+# QKA 框架
 
-# QKA 框架技能
+## 架构
 
-## 概述
-
-QKA 是一个 A 股量化交易回测框架。核心流程：
-
-```
-Data(symbols) → Strategy(策略类) → Backtest(回测) → Report(报告)
-                  ↑
-          indicators(预计算指标)
-```
-
-**类名约束：** 自定义策略类必须命名为 `MyStrategy`，继承 `Strategy`
-
-## 能力边界
-
-**能做的策略类型：**
-- 趋势跟踪（双均线、海龟突破、MACD）
-- 均值回归（RSI、Bollinger Bands）
-- 多因子选股（PE/ROE/动量/波动率打分选股，周期 rebalance）
-- 等权/市值加权组合
-- 定投（固定间隔买入固定金额）
-- 大盘 MA 择时、股债轮动
-
-**做不了的：**
-- 分钟级/高频（无分钟数据）
-- 期权、期货
-- 机器学习选股（无特征工程管道）
-- 实盘交易
-- 事件驱动（无财报/公告订阅）
-- 多周期策略（仅单周期）
-
-## A 股交易规则
-
-1. 买入股数必须是 100 的整数倍（一手）
-2. 价格必须 > 0 且不是 NaN
-3. 资金不足时不买入
-4. `sizing.percent()` 和 `sizing.fixed()` 已自动按手取整
+| 类 | 作用 |
+|-----|------|
+| `qka.Data` | 行情数据加载 + 技术指标计算 |
+| `qka.Strategy` | 策略基类 — 实现 `on_bar` 做交易决策 |
+| `qka.Backtest` | 回测引擎 — 串联 Data 和 Strategy，注入基础设施 |
 
 ---
 
-<!-- AUTO: API 签名 -->
+## Data
 
-### Data
+数据获取和指标预计算。
 
-### `Data(**symbols** \`Optional[List[str]]\` = None, **period** \`str\` = '1d', **adjust** \`str\` = 'qfq', **source** \`str\` = 'baostock', **pool_size** \`int\` = 10, **datadir** \`Optional[Path]\` = None, **indicators** \`Optional[dict]\` = None)\`
+### 构造
 
-    初始化数据对象
-
-### `Data.get(**lazy** \`bool\` = False) → \`lazy=False: pd.DataFrame，列名格式 {symbol}|{factor}\`\`
-
-    获取历史数据。 并发下载所有股票数据，应用因子计算，并返回合并后的数据。
-
-<!-- /AUTO -->
-
-# Data 模块
-
-数据获取、缓存和指标预计算。
-
-## Data 构造函数
+创建一个数据对象，配置数据源、股票代码和预计算指标。此时数据尚未下载，调用 `get()` 时才真正获取。
 
 ```python
 from qka import Data
 
 data = Data(
-    symbols=['000001.SZ', '600000.SH'],  # 股票代码
-    period='1d',                          # 周期：'1d'
-    adjust='qfq',                         # 复权：'qfq'/'hfq'/'bfq'
-    source='baostock',                    # 数据源：'baostock'/'akshare'/'qmt'
-    pool_size=10,                         # 并发线程数（仅 akshare）
-    datadir=None,                         # 缓存目录，默认 ./datadir
-    indicators=None,                      # 预计算指标
+    symbols=['000001.SZ', '600000.SH'],
+    period='1d',
+    adjust='qfq',
+    indicators=None,
 )
 ```
 
-- `symbols`: A 股代码 `000001.SZ`（深市）或 `600000.SH`（沪市）
-- `period`: 目前仅支持 `'1d'`（日线）
-- `adjust`: `'qfq'`（前复权，默认）、`'hfq'`（后复权）、`'bfq'`（不复权）
-- `source`: `'baostock'`（默认，串行下载）、`'akshare'`（HTTP 并发）、`'qmt'`（QMT）
-- `datadir`: 默认当前目录的 `datadir/`，缓存 parquet 文件
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `symbols` | `list[str]` | `None` | A 股代码，深市 `000001.SZ`，沪市 `600000.SH` |
+| `period` | `str` | `'1d'` | 数据周期，当前仅支持 `'1d'` |
+| `adjust` | `str` | `'qfq'` | 复权方式：`'qfq'` 前复权，`'hfq'` 后复权，`'bfq'` 不复权 |
+| `indicators` | `dict` | `None` | 预计算指标，见下方 |
 
-## indicators 参数
+### indicators
 
-两种格式：
+在构造 `Data` 时传入，利用数据加载过程一次性预计算所有指标。**不能**在构造后补充。
 
-### 格式一：字典（推荐）
+#### 内置指标
 
-```python
-data = Data(symbols=['000001.SZ'], indicators={
-    'sma_5': ('sma', 5),                   # (指标名, 参数...)
-    'sma_20': ('sma', 20),                 # 默认用 close 计算
-    'rsi_14': ('rsi', 14),
-    'macd': ('macd', 12, 26, 9),
-    'bbands': ('bbands', 20, 2),
-    'atr_14': ('atr', 14),
-    'ma5_custom': lambda df: df['close'].rolling(5).mean(),  # 自定义因子
-    'sma_on_high': ('sma', 'high', 20),    # 指定用 high 列计算
-})
-```
-
-支持的 TA 指标名：`sma`, `ema`, `wma`, `rsi`, `macd`, `bbands`, `atr`
-
-- `macd` 产生 3 列：`macd`, `macd_signal`, `macd_diff`
-- `bbands` 产生 3 列：`bbands_upper`, `bbands_middle`, `bbands_lower`
-
-### 格式二：函数
+直接透传 [ta](https://github.com/bukosabino/ta) 库的全部指标函数，格式为：`{'列名': ('ta.路径.函数名', '计算列', 参数...)}`。每个条目独立产一列，第二个参数固定为计算列名（不设默认值）。
 
 ```python
-data = Data(symbols=['000001.SZ'], indicators=lambda df:
-    df.assign(
-        ma5=df['close'].rolling(5).mean(),
-        ma20=df['close'].rolling(20).mean()
-    )
+data = Data(
+    symbols=['000001.SZ'],
+    indicators={
+        'sma_5':       ('ta.trend.sma_indicator', 'close', 5),
+        'sma_20':      ('ta.trend.sma_indicator', 'close', 20),
+        'ema_20':      ('ta.trend.ema_indicator', 'close', 20),
+        'rsi_14':      ('ta.momentum.rsi', 'close', 14),
+        'macd_line':   ('ta.trend.macd', 'close', 26, 12),
+        'macd_signal': ('ta.trend.macd_signal', 'close', 26, 12, 9),
+        'macd_hist':   ('ta.trend.macd_diff', 'close', 26, 12, 9),
+        'bb_upper':    ('ta.volatility.bollinger_hband', 'close', 20, 2),
+        'bb_middle':   ('ta.volatility.bollinger_mavg', 'close', 20),
+        'bb_lower':    ('ta.volatility.bollinger_lband', 'close', 20, 2),
+        'atr_14':      ('ta.volatility.average_true_range', 'high', 'low', 'close', 14),
+        'adx_14':      ('ta.trend.adx', 'high', 'low', 'close', 14),
+    },
 )
 ```
 
-函数接收单只股票的 DataFrame，返回添加了额外列的 DataFrame。
+- `spec[0]`: ta 函数完整路径
+- `spec[1]`: 计算列名（`'close'`/`'high'`/`'low'`/`'open'`/`'volume'`）
+- `spec[2:]`: 原样传给该函数
 
-## 获取数据
+可用的 ta 函数：
+
+#### trend
+
+| 签名 | 说明 |
+|------|------|
+| `ta.trend.adx(high, low, close, window=14)` | 平均趋向指数 |
+| `ta.trend.adx_neg(high, low, close, window=14)` | ADX 负向指标 |
+| `ta.trend.adx_pos(high, low, close, window=14)` | ADX 正向指标 |
+| `ta.trend.aroon_down(high, low, window=25)` | Aroon 下轨 |
+| `ta.trend.aroon_up(high, low, window=25)` | Aroon 上轨 |
+| `ta.trend.cci(high, low, close, window=20, constant=0.015)` | 商品通道指数 |
+| `ta.trend.dpo(close, window=20)` | 去趋势价格振荡器 |
+| `ta.trend.ema_indicator(close, window=12)` | 指数移动平均 |
+| `ta.trend.ichimoku_a(high, low, window1=9, window2=26, visual=False)` | 一目均衡表 A 线（先行带） |
+| `ta.trend.ichimoku_b(high, low, window2=26, window3=52, visual=False)` | 一目均衡表 B 线（先行带） |
+| `ta.trend.ichimoku_base_line(high, low, window1=9, window2=26, visual=False)` | 一目均衡表基准线 |
+| `ta.trend.ichimoku_conversion_line(high, low, window1=9, window2=26, visual=False)` | 一目均衡表转换线 |
+| `ta.trend.kst(close, roc1=10, roc2=15, roc3=20, roc4=30, window1=10, window2=10, window3=10, window4=15)` | 确然指标（KST） |
+| `ta.trend.kst_sig(close, roc1=10, roc2=15, roc3=20, roc4=30, window1=10, window2=10, window3=10, window4=15, nsig=9)` | KST 信号线 |
+| `ta.trend.macd(close, window_slow=26, window_fast=12)` | MACD 线（DIF） |
+| `ta.trend.macd_diff(close, window_slow=26, window_fast=12, window_sign=9)` | MACD 柱（HIST） |
+| `ta.trend.macd_signal(close, window_slow=26, window_fast=12, window_sign=9)` | MACD 信号线（DEA） |
+| `ta.trend.mass_index(high, low, window_fast=9, window_slow=25)` | 质量指数 |
+| `ta.trend.psar_down(high, low, close, step=0.02, max_step=0.2)` | 抛物线 SAR（下方） |
+| `ta.trend.psar_down_indicator(high, low, close, step=0.02, max_step=0.2)` | 抛物线 SAR 下方指示 |
+| `ta.trend.psar_up(high, low, close, step=0.02, max_step=0.2)` | 抛物线 SAR（上方） |
+| `ta.trend.psar_up_indicator(high, low, close, step=0.02, max_step=0.2)` | 抛物线 SAR 上方指示 |
+| `ta.trend.sma_indicator(close, window=12)` | 简单移动平均 |
+| `ta.trend.stc(close, window_slow=50, window_fast=23, cycle=10, smooth1=3, smooth2=3)` | 沙夫趋势周期 |
+| `ta.trend.trix(close, window=15)` | 三重指数平滑平均线 |
+| `ta.trend.vortex_indicator_neg(high, low, close, window=14)` | 漩涡指标负向 |
+| `ta.trend.vortex_indicator_pos(high, low, close, window=14)` | 漩涡指标正向 |
+| `ta.trend.wma_indicator(close, window=9)` | 加权移动平均 |
+
+#### momentum
+
+| 签名 | 说明 |
+|------|------|
+| `ta.momentum.awesome_oscillator(high, low, window1=5, window2=34)` | 动量振荡器 |
+| `ta.momentum.kama(close, window=10, pow1=2, pow2=30)` | 考夫曼自适应移动平均 |
+| `ta.momentum.ppo(close, window_slow=26, window_fast=12, window_sign=9)` | 价格百分比振荡器 |
+| `ta.momentum.ppo_hist(close, window_slow=26, window_fast=12, window_sign=9)` | PPO 柱 |
+| `ta.momentum.ppo_signal(close, window_slow=26, window_fast=12, window_sign=9)` | PPO 信号线 |
+| `ta.momentum.pvo(volume, window_slow=26, window_fast=12, window_sign=9)` | 成交量百分比振荡器 |
+| `ta.momentum.pvo_hist(volume, window_slow=26, window_fast=12, window_sign=9)` | PVO 柱 |
+| `ta.momentum.pvo_signal(volume, window_slow=26, window_fast=12, window_sign=9)` | PVO 信号线 |
+| `ta.momentum.roc(close, window=12)` | 变动率 |
+| `ta.momentum.rsi(close, window=14)` | 相对强弱指数 |
+| `ta.momentum.stoch(high, low, close, window=14, smooth_window=3)` | 随机指标 %K |
+| `ta.momentum.stoch_signal(high, low, close, window=14, smooth_window=3)` | 随机指标 %D |
+| `ta.momentum.stochrsi(close, window=14, smooth1=3, smooth2=3)` | 随机 RSI |
+| `ta.momentum.stochrsi_d(close, window=14, smooth1=3, smooth2=3)` | 随机 RSI %D |
+| `ta.momentum.stochrsi_k(close, window=14, smooth1=3, smooth2=3)` | 随机 RSI %K |
+| `ta.momentum.tsi(close, window_slow=25, window_fast=13)` | 真实强度指数 |
+| `ta.momentum.ultimate_oscillator(high, low, close, window1=7, window2=14, window3=28, weight1=4.0, weight2=2.0, weight3=1.0)` | 终极振荡器 |
+| `ta.momentum.williams_r(high, low, close, lbp=14)` | 威廉指标 |
+
+#### volatility
+
+| 签名 | 说明 |
+|------|------|
+| `ta.volatility.average_true_range(high, low, close, window=14)` | 平均真实波幅 |
+| `ta.volatility.bollinger_hband(close, window=20, window_dev=2)` | 布林带上轨 |
+| `ta.volatility.bollinger_hband_indicator(close, window=20, window_dev=2)` | 布林带上轨指示 |
+| `ta.volatility.bollinger_lband(close, window=20, window_dev=2)` | 布林带下轨 |
+| `ta.volatility.bollinger_lband_indicator(close, window=20, window_dev=2)` | 布林带下轨指示 |
+| `ta.volatility.bollinger_mavg(close, window=20)` | 布林带中轨 |
+| `ta.volatility.bollinger_pband(close, window=20, window_dev=2)` | 布林带 %B |
+| `ta.volatility.bollinger_wband(close, window=20, window_dev=2)` | 布林带带宽 |
+| `ta.volatility.donchian_channel_hband(high, low, close, window=20, offset=0)` | 唐奇安通道上轨 |
+| `ta.volatility.donchian_channel_lband(high, low, close, window=20, offset=0)` | 唐奇安通道下轨 |
+| `ta.volatility.donchian_channel_mband(high, low, close, window=10, offset=0)` | 唐奇安通道中轨 |
+| `ta.volatility.donchian_channel_pband(high, low, close, window=10, offset=0)` | 唐奇安通道 %B |
+| `ta.volatility.donchian_channel_wband(high, low, close, window=10, offset=0)` | 唐奇安通道带宽 |
+| `ta.volatility.keltner_channel_hband(high, low, close, window=20, window_atr=10, original_version=True)` | 肯特纳通道上轨 |
+| `ta.volatility.keltner_channel_hband_indicator(high, low, close, window=20, window_atr=10, original_version=True)` | 肯特纳通道上轨指示 |
+| `ta.volatility.keltner_channel_lband(high, low, close, window=20, window_atr=10, original_version=True)` | 肯特纳通道下轨 |
+| `ta.volatility.keltner_channel_lband_indicator(high, low, close, window=20, window_atr=10, original_version=True)` | 肯特纳通道下轨指示 |
+| `ta.volatility.keltner_channel_mband(high, low, close, window=20, window_atr=10, original_version=True)` | 肯特纳通道中轨 |
+| `ta.volatility.keltner_channel_pband(high, low, close, window=20, window_atr=10, original_version=True)` | 肯特纳通道 %B |
+| `ta.volatility.keltner_channel_wband(high, low, close, window=20, window_atr=10, original_version=True)` | 肯特纳通道带宽 |
+| `ta.volatility.ulcer_index(close, window=14)` | 溃疡指数 |
+
+#### 自定义指标
+
+非 ta 库的自定义因子用 callable：
 
 ```python
-data = Data(symbols=['000001.SZ', '600000.SH'], indicators={'sma_5': ('sma', 5)})
+indicators={
+    'ma5': lambda df: df['close'].rolling(5).mean(),
+}
+```
 
-# 下载并返回全部数据（触发下载）
+函数接收单只股票的 DataFrame（含 `open/high/low/close/volume`），返回添加了新列的 DataFrame。
+
+### get()
+
+`get(lazy=False, start_date=None, end_date=None) → pd.DataFrame`
+
+调用后触发数据下载和指标计算，返回合并后的宽表。`Backtest.run()` 内部会调用它。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `lazy` | `bool` | `False` | 返回 `dask.DataFrame` 而非 `pd.DataFrame` |
+| `start_date` | `str` | `None` | 起始日期 `'YYYY-MM-DD'`。有指标时自动向后扩展窗口确保预热数据充足 |
+| `end_date` | `str` | `None` | 截止日期 `'YYYY-MM-DD'` |
+
+```python
 df = data.get()
-
-# 懒加载模式（大数据用 dask，分块迭代）
-ddf = data.get(lazy=True)
+df = data.get(start_date='2024-01-01', end_date='2024-12-31')
 ```
 
-- `get()` 返回 `pd.DataFrame`，列名格式 `{symbol}|{factor}`
-- 示例列名：`000001.SZ|close`, `000001.SZ|sma_5`, `600000.SH|volume`
-- `get(lazy=True)` 返回 `dask.DataFrame`，计算前操作延迟执行
-
-## 常见错误
+| 属性 | 说明 |
+|------|------|
+| 类型 | `pd.DataFrame`（`lazy=True` 时返回 `dask.DataFrame`） |
+| 索引 | 日期索引，**索引名为 `"date"`**。`reset_index()` 后日期列名也是 `"date"` |
+| 列名 | `{symbol}|{factor}` — 例如 `000001.SZ|close`、`000001.SZ|sma_5`、`600000.SH|volume` |
+| 列值 | 全部为 `float64`，指标列的早期行可能含 `NaN` |
+| 异常 | 无数据时抛出 `RuntimeError` |
 
 ```python
-# ✅ 正确：传 indicators 到 Data 构造函数
-Data(symbols=['000001.SZ'], indicators={'sma_5': ('sma', 5)})
+# 列名格式：{symbol}|{factor}
+df.columns  # ['000001.SZ|open', '000001.SZ|close', '000001.SZ|sma_5',
+            #  '600000.SH|open', '600000.SH|close', ...]
 
-# ❌ 错误：Data() 后不能动态加指标
-data = Data(['000001.SZ'])
-data.indicators = {...}  # 没用
+# 索引名为 "date"，reset_index 后转为 pd.Timestamp 列
+df = df.reset_index()
+df['date'].iloc[0]          # Timestamp('2024-01-02 00:00:00')
+
+# 输出 JSON 前需转为字符串
+df['date'] = df['date'].dt.strftime('%Y-%m-%d')
+df['date'].iloc[0]          # '2024-01-02'
 ```
 
 ---
 
-<!-- AUTO: API 签名 -->
+## Strategy
 
-### Strategy
+策略基类。所有交易策略必须继承 `qka.Strategy`，实现 `on_bar` 方法。
 
-### `Strategy(**cash** \`float\` = 100000.0)\`
+`broker` / `sizing` / `_data` 由 `Backtest.run()` 在执行时注入，策略 `__init__` 不需要创建它们。
 
-    初始化策略
-
-### `Strategy.get(**factor** \`str\`) → \`pd.Series，index=股票代码，values=最新值\`\`
-
-    获取当前 bar 的横截面数据。 替代旧的 on_bar(date, get) 中的 get 参数。 仅当 on_bar 通过 self._data 注入数据后才能使用。
-
-### `Strategy.history(**factor** \`str\`, **window** \`int\` = 20) → \`pd.DataFrame，行=日期，列=股票代码\`\`
-
-    获取因子的历史窗口数据。
-
-### `Strategy.on_bar(**date**)\`
-
-    每个 bar 的处理逻辑，必须由子类实现。 使用 self.get(factor) / self.history(factor, window) 获取数据。 --- 用法 --- class MyStrategy(Strategy): def on_bar(self, date): # 横截面数据（当前 bar 所有股票） close = self.get('close') # 历史序列（过去 N...
-
-<!-- /AUTO -->
-
-# Strategy 模块
-
-策略编写核心。
-
-## 策略类结构
+### 构造
 
 ```python
 from qka import Strategy
 
 class MyStrategy(Strategy):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        # 初始化自定义状态（可选）
-        # 不写 __init__ 也行，用父类默认值
+    def __init__(self):
+        super().__init__()
+        # 在这里定义自己的参数
+        self.lookback = 20
 
     def on_bar(self, date):
-        """每个交易日回调一次"""
-        # date: pd.Timestamp
-        # self.get() / self.history() 获取数据
-        # self.broker 交易
-        # self.sizing 计算仓位
-        pass
-```
-
-**规则：**
-- 类名必须是 `MyStrategy`
-- `__init__` 必须用 `**kwargs` 透传，不能固定参数
-- ❌ 禁止写 `on_bar(self, date, get)`——没有 `get` 参数
-
-## self.get(factor) -> pd.Series
-
-当前 bar 所有股票的横截面数据。
-
-```python
-close = self.get('close')           # 所有股票的收盘价
-volume = self.get('volume')         # 成交量
-high = self.get('high')             # 最高价
-
-for sym in close.index:             # 遍历股票
-    price = float(close[sym])
-    if price > 0:
         ...
 ```
 
-- `factor`: 因子名，如 `'close'`, `'open'`, `'high'`, `'low'`, `'volume'`
-- 也可以取预计算指标：`self.get('sma_5')`, `self.get('rsi_14')`
-- 返回 `pd.Series`, index=股票代码
-- 如果某股票当前值缺失，会从 Series 中排除
+| 约束 | 说明 |
+|------|------|
+| `__init__` | **必须**调用 `super().__init__()`。不需要传任何参数 |
+| `on_bar` 签名 | 只有 `self` 和 `date`。**没有** `get` 参数（旧版 API，已废弃） |
+| `self.params` | **不存在**。不要写 `self.params.get('fast', 5)`，直接用实例属性 |
+
+`Backtest.run()` 在执行时注入以下属性：
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `self.broker` | `Broker` | 虚拟券商，执行买卖、管理资金和持仓 |
+| `self.sizing` | `SizingAccessor` | 仓位计算，`self.sizing.percent(0.1, price)` |
+| `self._data` | `DataAccessor` | 私有，供 `self.get()` / `self.history()` 使用，勿直接访问 |
+
+### self.get()
+
+`get(factor: str) → pd.Series`
+
+获取当前 bar 的横截面数据。**只能在 `on_bar` 内调用**。
 
 ```python
-# ✅ 正确用法
-close = self.get('close')
-for sym in close.index:
-    ...
-
-# ❌ 错误用法
-self.get('close', count=20)  # 没有 count 参数
-get('close')                  # get 不是全局函数
+close = self.get('close')   # pd.Series，index=股票代码，value=当前价格
+high  = self.get('high')
+sma5  = self.get('sma_5')   # indicators 中定义的指标列
 ```
 
-## self.history(factor, window) -> pd.DataFrame
-
-因子的历史窗口数据。
+| 属性 | 说明 |
+|------|------|
+| 返回类型 | `pd.Series` |
+| index | 股票代码，如 `'000001.SZ'`、`'600000.SH'` |
+| values | 当前 bar 的最新值，`float` |
+| 空值 | 无数据时返回空 `pd.Series`，不是 `None` |
 
 ```python
-hist = self.history('close', 20)        # 过去 20 天收盘价
-ma5 = hist.iloc[-5:].mean()             # 最近 5 天均值，Series(index=股票代码)
-today_close = hist.iloc[-1]             # 今天收盘价
-yesterday_close = hist.iloc[-2]         # 昨天收盘价
-series = hist[sym].dropna()             # 某只股票的历史序列
+# 安全访问
+if '000001.SZ' in close.index:
+    price = float(close['000001.SZ'])
 ```
 
-- 返回 `pd.DataFrame`, 行=日期（倒序）, 列=股票代码
-- 如果 `history` 的数据不够 `window` 天，前几行会有 NaN
-- **用 `.dropna()` 清理后再计算**
-- `hist.iloc[-N:]` 取最近 N 天
+### self.history()
 
-## self.broker
+`history(factor: str, window: int = 20) → pd.DataFrame`
 
-交易接口。详见下方 Broker 模块。
+获取因子的历史窗口数据。
 
 ```python
-self.broker.buy('000001.SZ', price, 100)    # 买入 100 股
-self.broker.sell('000001.SZ', price, 100)   # 卖出 100 股
+hist = self.history('close', 20)  # 最近 20 天的收盘价
 ```
 
-## self.sizing
+| 属性 | 说明 |
+|------|------|
+| 返回类型 | `pd.DataFrame` |
+| 行 | 日期（`pd.Timestamp`），最近的在最后 |
+| 列 | 股票代码 |
+| 异常 | 因子不存在时返回空 DataFrame（有索引无列），不抛异常 |
 
-仓位计算。详见下方 Sizing 模块。
+### self.broker
+
+虚拟券商，管理资金和持仓。提供 `buy` / `sell` 两个交易方法。
+
+| 属性 | 说明 |
+|------|------|
+| `self.broker.cash` | 当前可用现金 |
+| `self.broker.positions` | `{symbol: {'size': int, 'avg_price': float}}` |
+
+#### buy
+
+`buy(symbol: str, price: float, size: int) → bool`
+
+买入，`size` 必须是 100 的整数倍（A 股 1 手 = 100 股）。
 
 ```python
-# 10% 资金买入，自动按手取整
-size = self.sizing.percent(0.1, price)
-self.broker.buy(sym, price, size)
+success = self.broker.buy('000001.SZ', float(close['000001.SZ']), 100)
+```
+
+- 实际成交价 = `price * (1 + slippage)`（默认滑点 0.1%）
+- 自动扣佣金（万 2.5，最低 5 元）
+- 资金不足返回 `False`
+- `price <= 0` 返回 `False`（前复权可能导致早期价格为负）
+
+#### sell
+
+`sell(symbol: str, price: float, size: int) → bool`
+
+卖出，`size` 必须是 100 的整数倍。
+
+```python
+success = self.broker.sell('000001.SZ', float(close['000001.SZ']), 100)
+```
+
+- 自动扣佣金 + 印花税（万 5，仅卖出）
+- 持仓不足返回 `False`
+
+### self.sizing
+
+仓位计算。**返回值已经是按手取整（100 的倍数）**。
+
+| 方法 | 说明 |
+|------|------|
+| `percent(ratio, price)` | 用可用现金的 `ratio` 比例买入。`ratio` 在 0~1 之间 |
+| `fixed_amount(amount, price)` | 固定金额买入 |
+| `fixed_shares(n)` | 固定股数 |
+| `atr_risk(risk_ratio, price, atr_value, multiplier=2.0)` | ATR 风险仓位 |
+
+```python
+price = float(close['000001.SZ'])
+size = self.sizing.percent(0.1, price)  # 10% 仓位，已按手取整
+if size > 0:
+    self.broker.buy('000001.SZ', price, size)
+```
+
+### 完整示例
+
+```python
+from qka import Strategy
+
+class MyStrategy(Strategy):
+    def __init__(self):
+        super().__init__()
+        self.position_pct = 0.2   # 每次买入用 20% 仓位
+
+    def on_bar(self, date):
+        close = self.get('close')
+        sma_fast = self.get('sma_5')
+        sma_slow = self.get('sma_20')
+
+        for symbol in close.index:
+            price = float(close[symbol])
+            if symbol not in sma_fast.index or symbol not in sma_slow.index:
+                continue
+
+            if sma_fast[symbol] > sma_slow[symbol]:
+                size = self.sizing.percent(self.position_pct, price)
+                if size > 0:
+                    self.broker.buy(symbol, price, size)
+            elif sma_fast[symbol] < sma_slow[symbol]:
+                pos = self.broker.positions.get(symbol, {}).get('size', 0)
+                if pos > 0:
+                    self.broker.sell(symbol, price, pos)
 ```
 
 ---
 
-<!-- AUTO: API 签名 -->
+## Backtest
 
-### Broker
+回测引擎，串联 Data 和 Strategy。在执行时注入 broker/sizing/data。
 
-### `Broker(**initial_cash** = 100000.0, **commission_rate** = DEFAULT_COMMISSION_RATE, **stamp_duty_rate** = DEFAULT_STAMP_DUTY_RATE, **slippage** = DEFAULT_SLIPPAGE)\`
-
-    初始化Broker
-
-### `Broker.on_bar(**date**, **get**)\`
-
-    Bar结束时记录当前状态。
-
-### `Broker.buy(**symbol** \`str\`, **price** \`float\`, **size** \`int\`) → \`bool\`\`
-
-    买入操作 考虑滑点（买入价上移）和佣金（最低 5 元）。
-
-### `Broker.sell(**symbol** \`str\`, **price** \`float\`, **size** \`int\`) → \`bool\`\`
-
-    卖出操作 考虑滑点（卖出价下移）、佣金（最低 5 元）和印花税。
-
-### `Broker.get(**factor** \`str\`, **timestamp** = None) → \`Any\`\`
-
-    从trades DataFrame中获取数据
-
-<!-- /AUTO -->
-
-# Broker 模块
-
-虚拟交易经纪商，管理资金、持仓和费用。
-
-## 初始化
-
-Broker 由 Strategy 自动创建，用户在策略中通过 `self.broker` 访问。
+### 构造
 
 ```python
-# Strategy 内部自动创建
-strategy = MyStrategy(cash=100000)  # 初始资金 10 万
+from qka import Backtest
+
+bt = Backtest(data, strategy)
 ```
 
-## 交易接口
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `data` | `Data` | 数据对象 |
+| `strategy` | `Strategy` | 策略对象 |
+
+构造时不执行任何操作，只绑定引用。
+
+### run()
+
+`run(cash=100000.0, start_date=None, end_date=None, benchmark=None)`
+
+执行回测。注入 broker/sizing/data 后遍历每个交易日，调用 `strategy.on_bar(date)`。
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `cash` | `100000.0` | 初始资金 |
+| `start_date` | `None` | 回测起始日期 `'YYYY-MM-DD'` |
+| `end_date` | `None` | 回测截止日期 |
+| `benchmark` | `None` | 基准指数代码，如 `'000300.SH'` |
+
+> 500 bar 以上自动分块迭代，避免一次性加载全量数据。
 
 ```python
-# 买入
-self.broker.buy(symbol, price, size)
-# symbol: 股票代码，如 '000001.SZ'
-# price: 成交价（float）
-# size: 股数（int，必须 100 的倍数）
-
-# 卖出
-self.broker.sell(symbol, price, size)
+bt.run(cash=200000, start_date='2024-01-01')
 ```
 
-## 状态属性
+执行后可通过 `bt.results` 和 `bt.trade_history` 获取结果，详见下方。
 
-```python
-self.broker.cash          # 可用资金（float）
-self.broker.positions     # 持仓 dict
+### bt.metrics
 
-# 持仓格式：
-# {symbol: {'size': int, 'avg_price': float, 'cost': float}}
-
-symbol in self.broker.positions  # 判断是否持仓
-```
-
-## 费用设置
-
-```python
-from qka import Broker
-
-broker = Broker(
-    initial_cash=100000,
-    commission_rate=0.00025,   # 万2.5 佣金（默认）
-    stamp_duty_rate=0.0005,    # 万5 印花税，仅卖出（默认）
-    slippage=0.001,            # 0.1% 滑点（默认）
-)
-```
-
-- 最低佣金 5 元
-- 印花税仅卖出时收取
-
-## 回测结果数据
-
-回测执行后，以下属性保存完整记录：
-
-### self.broker.trades — 逐日净值记录（pd.DataFrame）
-
-```python
-equity = self.broker.trades['total']     # 净值序列（Series, index=日期）
-cash   = self.broker.trades['cash']      # 现金
-value  = self.broker.trades['value']     # 持仓市值
-```
-
-用于构造净值曲线：
-
-```python
-import pandas as pd
-eq = pd.Series(self.broker.trades['total'].values, 
-               index=self.broker.trades.index)
-```
-
-### self.broker.trade_history — 逐笔交易记录（list[dict]）
-
-每笔 dict 的字段：
+`dict`，绩效指标，`run()` 结束时计算并缓存。
 
 | 字段 | 类型 | 说明 |
-|---|---|---|
-| `action` | str | `'buy'` 或 `'sell'` |
-| `symbol` | str | 股票代码 |
-| `price` | float | 市价 |
-| `exec_price` | float | 滑点后成交价 |
-| `size` | int | 股数 |
-| `amount` | float | 成交金额 |
-| `commission` | float | 佣金 |
-| `timestamp` | 时间戳 | 交易日期 |
-
-卖出额外含 `net_proceeds`（扣除费用后净收入）。
-
-## 正确/错误用法
-
-```python
-# ✅ 正确
-if '000001.SZ' in self.broker.positions:
-    size = self.broker.positions['000001.SZ']['size']
-    self.broker.sell('000001.SZ', price, size)
-
-# ❌ 错误：直接修改内部状态
-self.broker.cash -= 1000
-self.broker.positions['000001.SZ'] = {'size': 100, ...}
-```
-
----
-
-<!-- AUTO: API 签名 -->
-
-### SizingAccessor
-
-### `SizingAccessor(**broker**)\`
-### `SizingAccessor.fixed_shares(**n** \`int\`) → \`int\`\`
-
-    固定股数。 如果 n 不足一手（100股），返回 0。
-
-### `SizingAccessor.fixed_amount(**amount** \`float\`, **price** \`float\`) → \`int\`\`
-
-    固定金额。 计算 amount 能买多少股，向下按手取整。
-
-### `SizingAccessor.percent(**ratio** \`float\`, **price** \`float\`) → \`int\`\`
-
-    资金百分比。 使用可用现金的 ratio 比例买入，按手取整。
-
-### `SizingAccessor.atr_risk(**risk_ratio** \`float\`, **price** \`float\`, **atr_value** \`float\`, **multiplier** \`float\` = 2.0) → \`int\`\`
-
-    ATR 风险仓位。 基于 ATR（平均真实波幅）计算仓位，确保单笔亏损不超过 risk_ratio 比例。 公式：股数 = (cash * risk_ratio) / (atr_value * multiplier)
-
-### `SizingAccessor.kelly(**win_rate** \`float\`, **win_loss_ratio** \`float\`, **price** \`float\`) → \`int\`\`
-
-    凯利公式。 f* = (p * b - q) / b 其中： - p = 胜率 - b = 赔率（盈利/亏损） - q = 1 - p（败率） 当 f* ≤ 0 时返回 0（不建议下注）。
-
-<!-- /AUTO -->
-
-# Sizing 模块
-
-仓位计算工具。在策略中通过 `self.sizing` 访问。
-
-## 方法
-
-### self.sizing.percent(ratio, price) -> int
-
-按可用资金的百分比计算买入股数，自动向下取整到 100 的倍数。
+|------|------|------|
+| `initial_cash` | `float` | 初始资金 |
+| `final_equity` | `float` | 最终资产 |
+| `total_return_pct` | `float` | 总收益率（%） |
+| `annual_return_pct` | `float` | 年化收益率（%） |
+| `annual_volatility_pct` | `float` | 年化波动率（%） |
+| `sharpe_ratio` | `float` | 夏普比率（无风险利率 3%） |
+| `max_drawdown_pct` | `float` | 最大回撤（%） |
+| `calmar_ratio` | `float` | Calmar 比率 |
+| `total_trades` | `int` | 交易总次数 |
+| `win_rate_pct` | `float` | 胜率（%） |
+| `profit_loss_ratio` | `float` | 盈亏比 |
+| `total_commission` | `float` | 总手续费 |
+| `n_days` | `int` | 回测天数 |
 
 ```python
-# 用 10%（10000 元）资金买入
-price = float(self.get('close')['000001.SZ'])
-size = self.sizing.percent(0.1, price)
-self.broker.buy('000001.SZ', price, size)
+bt.run()
+print(bt.metrics['total_return_pct'])   # 15.3
+print(bt.metrics['sharpe_ratio'])        # 1.25
 ```
 
-- `ratio`: 资金比例，如 `0.1` = 10%, `0.5` = 50%
-- `price`: 当前价格
-- 返回：股数（int），已按手取整
-- 如果计算出的股数 < 100，返回 0
+### bt.results
 
-### self.sizing.fixed_shares(n) -> int
+`pd.DataFrame`，索引为日期。每行是当日收盘后的快照。
 
-买入固定股数。
+| 列 | 类型 | 说明 |
+|------|------|------|
+| `cash` | `float` | 可用现金 |
+| `value` | `float` | 持仓总市值 |
+| `total` | `float` | 总资产（cash + value） |
+| `positions` | `dict` | 各持仓明细，`{symbol: {size, avg_price, current_price, market_value, profit_pct}}` |
+| `trades` | `list[dict]` | 截止当日的全部交易记录 |
 
 ```python
-size = self.sizing.fixed_shares(1000)     # 买入 1000 股
-self.broker.buy('000001.SZ', price, size)
+bt.results.index        # DatetimeIndex
+bt.results['total']     # 每日总资产序列
+bt.results['cash']      # 每日现金序列
+bt.results.iloc[-1]     # 最终状态
 ```
 
-### self.sizing.fixed_amount(amount, price) -> int
+### bt.trade_history
 
-买入固定金额。
+`list[dict]`，逐笔交易明细，按成交顺序排列。
 
-```python
-size = self.sizing.fixed_amount(5000, price)  # 投入 5000 元
-self.broker.buy('000001.SZ', price, size)
-```
+买入时含：
 
-## 注意事项
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `action` | `str` | `'buy'` |
+| `symbol` | `str` | 股票代码 |
+| `price` | `float` | 下单价格（成交前） |
+| `exec_price` | `float` | 实际成交价（滑点后） |
+| `size` | `int` | 成交股数 |
+| `amount` | `float` | 成交金额（exec_price × size） |
+| `commission` | `float` | 佣金 |
+| `total_cost` | `float` | 总支出（amount + commission） |
+| `timestamp` | | 交易日 |
 
-```python
-# ✅ 正确：先算仓位再买入
-price = float(self.get('close')['000001.SZ'])
-size = self.sizing.percent(0.1, price)
-if size >= 100:
-    self.broker.buy(sym, price, size)
+卖出时含：
 
-# ❌ 错误：不校验 size 直接买
-self.broker.buy(sym, price, self.sizing.percent(0.1, price))
-# 如果 percent 返回 0，buy 会报错
-```
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `action` | `str` | `'sell'` |
+| `symbol` | `str` | 股票代码 |
+| `price` | `float` | 下单价格 |
+| `exec_price` | `float` | 实际成交价（滑点后） |
+| `size` | `int` | 成交股数 |
+| `amount` | `float` | 成交金额 |
+| `commission` | `float` | 佣金 |
+| `stamp_duty` | `float` | 印花税 |
+| `net_proceeds` | `float` | 净收入（amount - commission - stamp_duty） |
+| `timestamp` | | 交易日 |
 
----
-
-<!-- AUTO: API 签名 -->
-
-### Backtest
-
-### `Backtest(**data**, **strategy**)\`
-
-    初始化回测引擎
-
-### `Backtest.run(**benchmark** \`Optional[str]\` = None) → \`None。回测结果保存在 self.results 中，可通过\`\`
-
-    执行回测 遍历所有时间点，在每个时间点调用策略的on_bar方法进行交易决策， 并记录交易后的状态。 大规模回测（>500 bar）时自动使用分区迭代，分块加载数据到内存， 避免一次性加载全量数据。
-
-### `Backtest.summary() → \`dict\`\`
-
-    计算并打印回测绩效指标 返回包含以下指标的字典： - 总收益率、年化收益率、年化波动率 - 夏普比率、最大回撤、Calmar比率 - 胜率、盈亏比、交易次数 - 最终资产、总手续费
-
-<!-- /AUTO -->
-
-# Backtest 模块
-
-回测引擎，管理策略生命周期和数据加载流程。
-
-## 用法
-
-```python
-from qka import Data, Backtest
-
-data = Data(symbols=['000001.SZ'], indicators={'sma_5': ('sma', 5)})
-bt = Backtest(data, MyStrategy(cash=100000))
-bt.run(benchmark='000300.SH')   # 沪深300 为基准
-```
-
-- `data`: Data 实例（已配置 symbol 和 indicators）
-- `MyStrategy(cash=...)`: 策略实例，cash 为初始资金
-- `benchmark`: 基准指数代码，如 `'000300.SH'`（沪深300）、`'000001.SH'`（上证）
-
-## Backtest 参数
-
-```python
-bt = Backtest(
-    data,                         # Data 实例
-    strategy,                     # Strategy 实例
-    start_date='2023-01-01',      # 可选，数据过滤起始
-    end_date='2024-12-31',        # 可选，数据过滤结束
-)
-```
-
-## 回测结果
-
-### summary() -> dict
-
-```python
-metrics = bt.summary()
-```
-
-返回的字典包含：
-- `总收益率` — 策略总收益百分比
-- `年化收益率` — 年化收益率
-- `最大回撤` — 最大回撤百分比（负值）
-- `夏普比率` — 年化夏普比率
-- `胜率` — 盈利交易占比
-- `交易次数` — 总交易笔数
-- `benchmark_收益` — 基准总收益百分比
-- `benchmark_年化` — 基准年化收益率
-
-## 完整回测流程
+### 完整示例
 
 ```python
 from qka import Data, Strategy, Backtest
 
-class MyStrategy(Strategy):
+data = Data(
+    symbols=['000001.SZ'],
+    indicators={
+        'sma_5':  ('ta.trend.sma_indicator', 'close', 5),
+        'sma_20': ('ta.trend.sma_indicator', 'close', 20),
+    },
+)
+
+class MaCross(Strategy):
+    def __init__(self):
+        super().__init__()
+        self.pct = 0.2
+
     def on_bar(self, date):
         close = self.get('close')
+        fast = self.get('sma_5')
+        slow = self.get('sma_20')
         for sym in close.index:
             price = float(close[sym])
-            if price <= 0:
-                continue
-            if sym not in self.broker.positions:
-                size = self.sizing.percent(0.1, price)
-                if size >= 100:
+            if fast[sym] > slow[sym]:
+                size = self.sizing.percent(self.pct, price)
+                if size > 0:
                     self.broker.buy(sym, price, size)
+            else:
+                pos = self.broker.positions.get(sym, {}).get('size', 0)
+                if pos > 0:
+                    self.broker.sell(sym, price, pos)
 
-data = Data(symbols=['000001.SZ', '600000.SH'])
-bt = Backtest(data, MyStrategy(cash=100000))
-bt.run(benchmark='000300.SH')
-print(bt.summary())
+bt = Backtest(data, MaCross())
+bt.run(cash=200000, start_date='2024-01-01')
+print(bt.metrics['total_return_pct'])
 ```
-
----
