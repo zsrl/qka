@@ -30,10 +30,10 @@ dependencies = [
     "pyarrow>=21.0.0",
     "tqdm>=4.67.1",
     "dask[dataframe]>=2025.7.0",
-    "baostock>=0.8.9",
     "litellm>=1.81.14",
     "websockets>=16.0",
     "ta>=0.11.0",
+    "baostock>=0.9.1",
 ]
 
 [project.optional-dependencies]
