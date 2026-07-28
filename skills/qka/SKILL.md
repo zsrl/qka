@@ -22,7 +22,7 @@
 from qka import Data
 
 data = Data(
-    symbols=['000001.SZ', '600000.SH'],
+    symbols=['sz.000001', 'sh.600000'],
     period='1d',
     adjust='qfq',
     indicators=None,
@@ -31,7 +31,7 @@ data = Data(
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `symbols` | `list[str]` | `None` | A 股代码，深市 `000001.SZ`，沪市 `600000.SH` |
+| `symbols` | `list[str]` | `None` | A 股代码，baostock 格式 `sz.000001`、`sh.600000` |
 | `period` | `str` | `'1d'` | 数据周期，当前仅支持 `'1d'` |
 | `adjust` | `str` | `'qfq'` | 复权方式：`'qfq'` 前复权，`'hfq'` 后复权，`'bfq'` 不复权 |
 | `indicators` | `dict` | `None` | 预计算指标，见下方 |
@@ -46,7 +46,7 @@ data = Data(
 
 ```python
 data = Data(
-    symbols=['000001.SZ'],
+    symbols=['sz.000001'],
     indicators={
         'sma_5':       ('ta.trend.sma_indicator', 'close', 5),
         'sma_20':      ('ta.trend.sma_indicator', 'close', 20),
@@ -185,14 +185,14 @@ df = data.get(start_date='2024-01-01', end_date='2024-12-31')
 |------|------|
 | 类型 | `pd.DataFrame`（`lazy=True` 时返回 `dask.DataFrame`） |
 | 索引 | 日期索引，**索引名为 `"date"`**。`reset_index()` 后日期列名也是 `"date"` |
-| 列名 | `{symbol}|{factor}` — 例如 `000001.SZ|close`、`000001.SZ|sma_5`、`600000.SH|volume` |
+| 列名 | `{symbol}|{factor}` — 例如 `sz.000001|close`、`sz.000001|sma_5`、`sh.600000|volume` |
 | 列值 | 全部为 `float64`，指标列的早期行可能含 `NaN` |
 | 异常 | 无数据时抛出 `RuntimeError` |
 
 ```python
 # 列名格式：{symbol}|{factor}
-df.columns  # ['000001.SZ|open', '000001.SZ|close', '000001.SZ|sma_5',
-            #  '600000.SH|open', '600000.SH|close', ...]
+df.columns  # ['sz.000001|open', 'sz.000001|close', 'sz.000001|sma_5',
+            #  'sh.600000|open', 'sh.600000|close', ...]
 
 # 索引名为 "date"，reset_index 后转为 pd.Timestamp 列
 df = df.reset_index()
@@ -255,14 +255,14 @@ sma5  = self.get('sma_5')   # indicators 中定义的指标列
 | 属性 | 说明 |
 |------|------|
 | 返回类型 | `pd.Series` |
-| index | 股票代码，如 `'000001.SZ'`、`'600000.SH'` |
+| index | 股票代码，如 `'sz.000001'`、`'sh.600000'` |
 | values | 当前 bar 的最新值，`float` |
 | 空值 | 无数据时返回空 `pd.Series`，不是 `None` |
 
 ```python
 # 安全访问
-if '000001.SZ' in close.index:
-    price = float(close['000001.SZ'])
+if 'sz.000001' in close.index:
+    price = float(close['sz.000001'])
 ```
 
 ### self.history()
@@ -298,7 +298,7 @@ hist = self.history('close', 20)  # 最近 20 天的收盘价
 买入，`size` 必须是 100 的整数倍（A 股 1 手 = 100 股）。
 
 ```python
-success = self.broker.buy('000001.SZ', float(close['000001.SZ']), 100)
+success = self.broker.buy('sz.000001', float(close['sz.000001']), 100)
 ```
 
 - 实际成交价 = `price * (1 + slippage)`（默认滑点 0.1%）
@@ -313,7 +313,7 @@ success = self.broker.buy('000001.SZ', float(close['000001.SZ']), 100)
 卖出，`size` 必须是 100 的整数倍。
 
 ```python
-success = self.broker.sell('000001.SZ', float(close['000001.SZ']), 100)
+success = self.broker.sell('sz.000001', float(close['sz.000001']), 100)
 ```
 
 - 自动扣佣金 + 印花税（万 5，仅卖出）
@@ -331,10 +331,10 @@ success = self.broker.sell('000001.SZ', float(close['000001.SZ']), 100)
 | `atr_risk(risk_ratio, price, atr_value, multiplier=2.0)` | ATR 风险仓位 |
 
 ```python
-price = float(close['000001.SZ'])
+price = float(close['sz.000001'])
 size = self.sizing.percent(0.1, price)  # 10% 仓位，已按手取整
 if size > 0:
-    self.broker.buy('000001.SZ', price, size)
+    self.broker.buy('sz.000001', price, size)
 ```
 
 ### 完整示例
@@ -399,7 +399,7 @@ bt = Backtest(data, strategy)
 | `cash` | `100000.0` | 初始资金 |
 | `start_date` | `None` | 回测起始日期 `'YYYY-MM-DD'` |
 | `end_date` | `None` | 回测截止日期 |
-| `benchmark` | `None` | 基准指数代码，如 `'000300.SH'` |
+| `benchmark` | `None` | 基准指数代码，baostock 格式如 `'sh.000300'` |
 
 > 500 bar 以上自动分块迭代，避免一次性加载全量数据。
 
@@ -493,7 +493,7 @@ bt.results.iloc[-1]     # 最终状态
 from qka import Data, Strategy, Backtest
 
 data = Data(
-    symbols=['000001.SZ'],
+    symbols=['sz.000001'],
     indicators={
         'sma_5':  ('ta.trend.sma_indicator', 'close', 5),
         'sma_20': ('ta.trend.sma_indicator', 'close', 20),
@@ -524,3 +524,4 @@ bt = Backtest(data, MaCross())
 bt.run(cash=200000, start_date='2024-01-01')
 print(bt.metrics['total_return_pct'])
 ```
+

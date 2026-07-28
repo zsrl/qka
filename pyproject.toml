@@ -18,30 +18,16 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "akshare>=1.16.93",
-    "fastapi>=0.115.13",
-    "flask>=3.1.1",
-    "mcp[cli]>=1.9.0",
-    "nbformat>=5.10.4",
     "plotly>=6.1.1",
-    "uvicorn>=0.34.3",
-    "xtquant>=241014.1.2",
-    "ipykernel>=6.29.5",
     "pyarrow>=21.0.0",
     "tqdm>=4.67.1",
     "dask[dataframe]>=2025.7.0",
-    "litellm>=1.81.14",
-    "websockets>=16.0",
     "ta>=0.11.0",
     "baostock>=0.9.1",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "mkdocs>=1.6.1",
-    "mkdocs-material>=9.6.14",
-    "mkdocstrings>=0.29.1",
-    "mkdocstrings-python>=1.16.12",
     "python-semantic-release>=9.0.0",
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
@@ -50,14 +36,11 @@ dev = [
 
 [project.urls]
 Home = "https://github.com/zsrl/qka"
-Documentation = "https://zsrl.github.io/qka"
 Repository = "https://github.com/zsrl/qka"
 Issues = "https://github.com/zsrl/qka/issues"
 
 [project.scripts]
-qka-zmq-server = "qka.server.zmq_server:main"
 qka = "qka.cli:main"
-qka-ws-client = "qka.server.ws_client:main"
 
 [tool.hatch.version]
 source = "vcs"

@@ -20,16 +20,11 @@ from qka.core.broker import Broker
 from qka.core.sizing import SizingAccessor
 
 # 子模块导入
-from qka import core, utils, mcp
-
-# 交易相关（有依赖的模块暂时不导入，避免导入错误）
-# from qka.brokers.trade import create_trader
-# from qka.brokers.client import QMTClient
-# from qka.brokers.server import QMTServer
+from qka import core, utils
 
 __all__ = [
     # 核心功能
     'Data', 'Backtest', 'Strategy', 'Broker', 'DataAccessor', 'SizingAccessor',
     # 子模块
-    'core', 'utils', 'mcp'
+    'core', 'utils'
 ]
