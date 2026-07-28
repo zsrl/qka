@@ -10,7 +10,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-import akshare as ak
 import baostock as bs
 import dask.dataframe as dd
 from typing import List, Dict, Optional, Callable
@@ -24,11 +23,11 @@ class Data():
     通过 `indicators` 参数统一处理技术指标和自定义因子，在数据加载时一次性预计算。
     
     Attributes:
-        symbols (List[str]): 股票代码列表
+        symbols (List[str]): 股票代码列表，baostock 格式如 sz.000001、sh.600000
         period (str): 数据周期，如 '1d'、'1m' 等
         adjust (str): 复权方式，如 'qfq'、'hfq'、'bfq'
         indicators (dict | Callable): 预计算指标/因子
-        source (str): 数据源，如 'baostock'（默认）、'akshare'、'qmt'
+        source (str): 数据源，默认 'baostock'
         pool_size (int): 并发下载线程数
         datadir (Path): 数据缓存目录
         target_dir (Path): 目标存储目录
@@ -48,10 +47,10 @@ class Data():
         初始化数据对象
 
         Args:
-            symbols: 股票代码列表，如 ['000001.SZ', '600000.SH']
+            symbols: 股票代码列表，baostock 格式如 ['sz.000001', 'sh.600000']
             period: 数据周期，如 '1d'（日线）、'1m'（分钟）
             adjust: 复权方式，'qfq'（前复权）、'hfq'（后复权）、'bfq'（不复权）
-            source: 数据来源，'baostock'（默认）、'akshare'、'qmt'
+            source: 数据来源，默认 'baostock'
             pool_size: 并发下载线程数
             datadir: 缓存目录路径
             indicators: 预计算指标/因子，支持三种格式：
@@ -128,12 +127,7 @@ class Data():
 
         # ── 首次下载：全量 ──
         if not path.exists():
-            if self.source == 'akshare':
-                df = self._get_from_akshare(symbol)
-            elif self.source == 'baostock':
-                df = self._get_from_baostock(symbol)
-            else:
-                df = pd.DataFrame()
+            df = self._get_from_baostock(symbol)
 
             if len(df) == 0:
                 raise RuntimeError(f"{symbol}: baostock 返回空数据")
@@ -301,7 +295,8 @@ class Data():
             ddf = dd.concat(dfs, axis=1, join='outer')
             # 切片回用户请求的日期范围（去掉指标预热扩展部分）
             if start_date is not None and max_window > 0:
-                ddf = ddf[ddf.index >= pd.Timestamp(start_date)]
+                cutoff = pd.Timestamp(start_date)
+                ddf = ddf.loc[ddf.index >= cutoff]
             return ddf
 
         else:
@@ -458,51 +453,6 @@ class Data():
                     max_window = max(max_window, v)
         return max_window
 
-    def _get_from_akshare(self, symbol: str) -> pd.DataFrame:
-        """
-        从 akshare 获取单个股票的数据。
-
-        Args:
-            symbol (str): 股票代码，支持带后缀如 000001.SZ 或不带后缀的 000001
-
-        Returns:
-            pd.DataFrame: 股票数据，以 date 为索引，包含 open, high, low, close, volume, amount 列
-        """
-        column_mapping = {
-            "日期": "date",
-            "开盘": "open",
-            "收盘": "close",
-            "最高": "high",
-            "最低": "low",
-            "成交量": "volume",
-            "成交额": "amount",
-        }
-
-        # 下载数据
-        # akshare 不支持带 .SZ/.SH 后缀，需去除
-        clean_symbol = symbol.replace('.SZ', '').replace('.SH', '').replace('.BJ', '')
-        df = ak.stock_zh_a_hist(symbol=clean_symbol, period='daily', adjust=self.adjust)
-
-        # 数据标准化处理
-        # 1. 标准化列名
-        df = df.rename(columns=column_mapping)
-        if "date" in df.columns:
-            df["date"] = pd.to_datetime(df["date"])
-
-        # 2. 确保数值列为数值类型
-        numeric_cols = [c for c in ("open", "high", "low", "close", "volume", "amount") if c in df.columns]
-        for col in numeric_cols:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-        # 3. 只保留需要的列
-        mapped_columns = list(column_mapping.values())
-        available_columns = [col for col in mapped_columns if col in df.columns]
-        df = df[available_columns]
-
-        df = df.set_index('date')
-        # 设置索引
-        return df
-
     def _get_from_baostock(
         self, symbol: str,
         start_date: str = '1990-01-01',
@@ -512,37 +462,19 @@ class Data():
         从 baostock 获取单个股票的数据。
 
         Args:
-            symbol: 股票代码，支持带后缀如 000001.SZ 或 600000.SH
+            symbol: baostock 格式股票代码，如 sz.000001、sh.600000
             start_date: 起始日期，格式 YYYY-MM-DD，默认 1990-01-01
             end_date: 截止日期，格式 YYYY-MM-DD，默认 2050-12-31
 
         Returns:
             pd.DataFrame: 股票数据，以 date 为索引，包含 open, high, low, close, volume, amount 列
         """
-        # baostock 代码格式：sz.000001 / sh.600000
-        # 支持两种输入格式：
-        #   - 000001.SZ → code=000001, exchange=sz
-        #   - sz.000001 → code=000001, exchange=sz
-        parts = symbol.split('.')
-        if len(parts) == 2:
-            left, right = parts
-            if left.isdigit():
-                # 格式: 000001.SZ
-                code, exchange = left, right.lower()
-            else:
-                # 格式: sz.000001
-                code, exchange = right, left.lower()
-        else:
-            # 兜底：无后缀，直接当作代码
-            code, exchange = symbol, 'sh'
-        bs_code = f"{exchange}.{code}"
-
         # adjustflag: 1=不复权, 2=前复权, 3=后复权
         adjust_map = {'bfq': '1', 'qfq': '2', 'hfq': '3'}
         adjustflag = adjust_map.get(self.adjust, '2')
 
         rs = bs.query_history_k_data_plus(
-            bs_code,
+            symbol,
             "date,open,high,low,close,volume,amount",
             start_date=start_date,
             end_date=end_date,

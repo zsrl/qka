@@ -19,7 +19,7 @@
 from qka import Data, Strategy, Backtest
 
 data = Data(
-    symbols=['000001.SZ'],
+    symbols=['sz.000001'],
     indicators={
         'sma_5':  ('ta.trend.sma_indicator', 'close', 5),
         'sma_20': ('ta.trend.sma_indicator', 'close', 20),
@@ -72,7 +72,7 @@ pip install qka
 from qka import Data
 
 data = Data(
-    symbols=['000001.SZ', '600000.SH'],
+    symbols=['sz.000001', 'sh.600000'],
     indicators={
         'sma_5':  ('ta.trend.sma_indicator', 'close', 5),
         'rsi_14': ('ta.momentum.rsi', 'close', 14),
@@ -105,7 +105,7 @@ from qka import Backtest
 
 strategy = MyStrategy()
 bt = Backtest(data, strategy)
-bt.run(cash=200000, start_date='2024-01-01', benchmark='000300.SH')
+bt.run(cash=200000, start_date='2024-01-01', benchmark='sh.000300')
 print(bt.metrics['total_return_pct'])   # 总收益率
 print(bt.metrics['sharpe_ratio'])        # 夏普比率
 ```
@@ -137,9 +137,9 @@ print(bt.metrics['sharpe_ratio'])        # 夏普比率
 ## 致谢
 
 - [baostock](http://baostock.com) — 免费 A 股数据
-- [Akshare](https://github.com/akfamily/akshare) — 补充数据源
 - [ta](https://github.com/bukosabino/ta) — 技术指标库
 
 ---
 
 > ⚠️ 量化交易存在风险，请充分了解后再使用本框架。
+充分了解后再使用本框架。

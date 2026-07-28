@@ -171,14 +171,16 @@ class Backtest:
             benchmark_code: 基准代码，如 '000300.SH'
         """
         try:
-            import akshare as ak
-            clean_code = benchmark_code.replace('.SH', '').replace('.SZ', '').replace('.BJ', '')
-            bm_df = ak.stock_zh_index_daily(symbol=f"sh{clean_code}")
+            from qka.core.data import Data
+            bm_data = Data(symbols=[benchmark_code], source='baostock')
+            bm_df = bm_data.get(lazy=False)
             if bm_df is not None and not bm_df.empty:
-                bm_df['date'] = pd.to_datetime(bm_df['date'])
-                bm_df = bm_df.set_index('date')
-                bm_df = bm_df.sort_index()
-                self._benchmark_data = bm_df['close']
+                # 提取 close 列（可能是多股票 MultiIndex，取第一只）
+                close_col = [c for c in bm_df.columns if 'close' in str(c).lower()]
+                if close_col:
+                    self._benchmark_data = bm_df[close_col[0]]
+                else:
+                    self._benchmark_data = bm_df.iloc[:, 0]
                 print(f"基准数据加载成功: {benchmark_code}，{len(bm_df)} 个交易日")
         except Exception as e:
             print(f"基准数据加载失败: {e}")
