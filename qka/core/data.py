@@ -8,12 +8,26 @@ from pathlib import Path
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import baostock as bs
 import dask.dataframe as dd
 from typing import List, Dict, Optional, Callable
 from qka.utils.logger import logger
+from qka.core import indicator
+
+# qka 内置指标裸名集合，用于 dispatch 识别（无需 qka. 前缀）
+_QKA_BUILTIN_NAMES = frozenset({
+    'alpha', 'beta', 'sharpe', 'max_drawdown',
+    'information_ratio', 'rolling_zigzag',
+})
+
+
+def _is_qka_indicator(ind_type):
+    """判断指标类型是否为 qka 内置指标（支持 qka. 前缀或裸名）。"""
+    return (isinstance(ind_type, str) and
+            (ind_type.startswith('qka.') or ind_type in _QKA_BUILTIN_NAMES))
 
 class Data():
     """
@@ -36,6 +50,7 @@ class Data():
     def __init__(
         self, 
         symbols: Optional[List[str]] = None,
+        benchmark: Optional[str] = None,
         period: str = '1d',
         adjust: str = 'qfq',
         source: str = 'baostock',
@@ -48,6 +63,8 @@ class Data():
 
         Args:
             symbols: 股票代码列表，baostock 格式如 ['sz.000001', 'sh.600000']
+            benchmark: 基准代码，如 'sh.000300'。基准数据以 benchmark| 前缀加入最终 DataFrame，
+                       仅供辅助计算（β/α 等），不参与指标计算
             period: 数据周期，如 '1d'（日线）、'1m'（分钟）
             adjust: 复权方式，'qfq'（前复权）、'hfq'（后复权）、'bfq'（不复权）
             source: 数据来源，默认 'baostock'
@@ -76,6 +93,7 @@ class Data():
                 函数接收单只股票的 DataFrame，返回添加了额外列的 DataFrame。
         """
         self.symbols = symbols or []
+        self.benchmark = benchmark
         self.period = period
         self.adjust = adjust
         self.source = source
@@ -107,15 +125,21 @@ class Data():
         self.target_dir = self.datadir / self.source / self.period / (self.adjust or "bfq")
         self.target_dir.mkdir(parents=True, exist_ok=True)
 
-    def _download(self, symbol: str) -> Path:
+    def _download(
+        self, symbol: str,
+        download_start: str = None,
+        download_end: str = None,
+    ) -> Path:
         """
-        下载或更新单个股票的数据。
+        按需下载单个股票数据。
 
-        首次下载全量数据。已存在时只增量拉取最新数据（从 parquet 最后日期到今日），
-        追加合并后重新写入，确保缓存始终保持最新。
+        首次下载只拉请求范围（非全量）。已存在时检查缓存覆盖范围，
+        只补下载缺失的部分（前面缺失补前面，后面缺失补后面），合并去重写回。
 
         Args:
             symbol: 股票代码
+            download_start: 下载起始日期，格式 YYYY-MM-DD。None 表示拉全量（1990-01-01）
+            download_end: 下载截止日期，格式 YYYY-MM-DD。None 表示到今天
 
         Returns:
             Path: 数据文件路径
@@ -124,62 +148,97 @@ class Data():
             RuntimeError: 数据源返回空数据（首次下载时）
         """
         path = self.target_dir / f"{symbol}.parquet"
+        default_start = '1990-01-01'
+        default_end = pd.Timestamp.now().strftime("%Y-%m-%d")
 
-        # ── 首次下载：全量 ──
+        # ── 首次下载：只拉请求范围 ──
         if not path.exists():
-            df = self._get_from_baostock(symbol)
-
+            df = self._get_from_baostock(
+                symbol,
+                start_date=download_start or default_start,
+                end_date=download_end or default_end,
+            )
             if len(df) == 0:
                 raise RuntimeError(f"{symbol}: baostock 返回空数据")
             table = pa.Table.from_pandas(df)
             pq.write_table(table, path)
             return path
 
-        # ── 增量更新 ──
+        # ── 增量更新：检查缓存覆盖，补缺失范围 ──
         if self.source != 'baostock':
-            return path  # 仅 baostock 支持增量
+            return path
 
-        # 读已有数据的最后日期
         existing = pd.read_parquet(path)
         if not isinstance(existing.index, pd.DatetimeIndex):
-            return path  # 非日期索引，跳过增量（保持原文件不变）
-        last_date = existing.index.max()
-        today_str = pd.Timestamp.now().strftime("%Y-%m-%d")
-        next_date = (last_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+            return path
 
-        if next_date > today_str:
-            return path  # 已是最新
+        cache_min = existing.index.min()
+        cache_max = existing.index.max()
+        pieces = [existing]
+        changed = False
 
-        df_new = self._get_from_baostock(symbol, start_date=next_date)
-        if len(df_new) == 0:
-            return path  # 没有新数据（交易日还未到）
+        # 往前补
+        req_start = pd.Timestamp(download_start) if download_start else None
+        if req_start is not None and req_start < cache_min:
+            end_before = (cache_min - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+            df_before = self._get_from_baostock(
+                symbol, start_date=download_start, end_date=end_before,
+            )
+            if len(df_before) > 0:
+                pieces.insert(0, df_before)
+                changed = True
 
-        # 合并去重
-        combined = pd.concat([existing, df_new])
-        combined = combined[~combined.index.duplicated(keep='last')]
-        combined = combined.sort_index()
+        # 往后补
+        req_end = pd.Timestamp(download_end) if download_end else pd.Timestamp.now()
+        if req_end > cache_max:
+            start_after = (cache_max + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+            df_after = self._get_from_baostock(
+                symbol,
+                start_date=start_after,
+                end_date=download_end or default_end,
+            )
+            if len(df_after) > 0:
+                pieces.append(df_after)
+                changed = True
 
-        table = pa.Table.from_pandas(combined)
-        pq.write_table(table, path)
+        if changed:
+            combined = pd.concat(pieces)
+            combined = combined[~combined.index.duplicated(keep='last')]
+            combined = combined.sort_index()
+            table = pa.Table.from_pandas(combined)
+            pq.write_table(table, path)
+
         return path
 
-    def _needs_download(self, symbol: str) -> bool:
+    def _needs_download(
+        self, symbol: str,
+        download_start: str = None,
+        download_end: str = None,
+    ) -> bool:
         """
-        判断股票是否需要网络下载（parquet 不存在，或 baostock 有增量数据）。
+        判断股票是否需要网络下载。
+        缓存不存在、不覆盖请求范围、或需要拉最新数据时返回 True。
         """
         path = self.target_dir / f"{symbol}.parquet"
         if not path.exists():
             return True
         if self.source != 'baostock':
             return False
-        # baostock：检查是否已是最新
         existing = pd.read_parquet(path)
         if not isinstance(existing.index, pd.DatetimeIndex):
             return False
-        last_date = existing.index.max()
-        today_str = pd.Timestamp.now().strftime("%Y-%m-%d")
-        next_date = (last_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-        return next_date <= today_str
+        cache_min = existing.index.min()
+        cache_max = existing.index.max()
+        today = pd.Timestamp.now().floor('D')
+
+        if download_start is not None and pd.Timestamp(download_start) < cache_min:
+            return True
+        if download_end is not None and pd.Timestamp(download_end) > cache_max:
+            return True
+        # 无 end_date 时检查是否有最新数据
+        if download_end is None and cache_max < today:
+            return True
+        return False
 
     def get(self, lazy: bool = False, start_date: str = None, end_date: str = None):
         """
@@ -210,9 +269,9 @@ class Data():
 
         # 构建 parquet predicate pushdown 过滤（日期 + 指标预热扩展）
         pq_filters = None
+        read_start = None
         if start_date is not None or end_date is not None or max_window > 0:
             pq_filters = []
-            read_start = None
             if start_date is not None:
                 read_start = pd.Timestamp(start_date)
             if max_window > 0:
@@ -227,8 +286,18 @@ class Data():
             if not pq_filters:
                 pq_filters = None
 
-        # 筛选需要网络下载的股票
-        need_download = [s for s in self.symbols if self._needs_download(s)]
+        # 计算网络下载范围（带预热扩展的 start_date）
+        download_start = read_start.strftime("%Y-%m-%d") if read_start is not None else None
+        download_end = end_date
+
+        # 筛选需要网络下载的股票（含基准）
+        all_symbols = list(self.symbols)
+        if self.benchmark and self.benchmark not in all_symbols:
+            all_symbols.append(self.benchmark)
+        need_download = [
+            s for s in all_symbols
+            if self._needs_download(s, download_start, download_end)
+        ]
 
         # 仅当有股票需要下载时才登录 baostock
         bs_logged_in = False
@@ -244,14 +313,16 @@ class Data():
                 if self.source == 'baostock':
                     for symbol in tqdm(need_download, desc="下载数据"):
                         try:
-                            self._download(symbol)
+                            self._download(symbol, download_start, download_end)
                         except Exception as e:
                             errors.append(f"{symbol}: {e}")
                             print(f"\n[警告] 下载 {symbol} 失败: {e}")
                 else:
                     with ThreadPoolExecutor(max_workers=self.pool_size) as executor:
                         futures = {
-                            executor.submit(self._download, symbol): symbol
+                            executor.submit(
+                                self._download, symbol, download_start, download_end,
+                            ): symbol
                             for symbol in need_download
                         }
                         with tqdm(total=len(need_download), desc="下载数据") as pbar:
@@ -282,6 +353,7 @@ class Data():
                     logger.warning(f"数据文件不存在，跳过: {parquet_path}")
                     continue
                 ddf = dd.read_parquet(str(parquet_path), filters=pq_filters)
+                ddf['returns'] = ddf['close'].diff() / ddf['close'].shift(1)
                 ddf = self._apply_indicators(ddf)
                 column_mapping = {col: f'{symbol}|{col}' for col in ddf.columns}
                 dfs.append(ddf.rename(columns=column_mapping))
@@ -297,6 +369,14 @@ class Data():
             if start_date is not None and max_window > 0:
                 cutoff = pd.Timestamp(start_date)
                 ddf = ddf.loc[ddf.index >= cutoff]
+
+            # 基准数据
+            if self.benchmark:
+                ddf = self._add_benchmark(ddf, self.target_dir, pq_filters)
+
+            # qka 内置指标（需要 benchmark 和 symbol 前缀）
+            ddf = self._apply_qka_indicators(ddf)
+
             return ddf
 
         else:
@@ -308,6 +388,7 @@ class Data():
                     logger.warning(f"数据文件不存在，跳过: {parquet_path}")
                     continue
                 df = dd.read_parquet(str(parquet_path), filters=pq_filters)
+                df['returns'] = df['close'].diff() / df['close'].shift(1)
                 df = self._apply_indicators(df)
                 column_mapping = {col: f'{symbol}|{col}' for col in df.columns}
                 dfs.append(df.rename(columns=column_mapping))
@@ -323,7 +404,32 @@ class Data():
             # 切片回用户请求的日期范围
             if start_date is not None and max_window > 0:
                 result = result[result.index >= pd.Timestamp(start_date)]
+
+            # 基准数据
+            if self.benchmark:
+                result = self._add_benchmark(result, self.target_dir, pq_filters)
+
+            # qka 内置指标（需要 benchmark 和 symbol 前缀）
+            result = self._apply_qka_indicators(result)
+
             return result
+
+    def _add_benchmark(self, df, target_dir, pq_filters):
+        """将基准数据的 returns 以 benchmark| 前缀追加到 DataFrame。"""
+        bench_path = target_dir / f"{self.benchmark}.parquet"
+        if not bench_path.exists():
+            logger.warning(f"基准数据文件不存在: {bench_path}")
+            return df
+        bench_df = pd.read_parquet(bench_path, filters=pq_filters)
+        bench_df['returns'] = bench_df['close'].diff() / bench_df['close'].shift(1)
+        bench_returns = bench_df['returns'].rename('benchmark|returns')
+
+        if isinstance(df, dd.DataFrame):
+            # dask: 用 assign 加列，pandas Series 会自动对齐分区
+            return df.assign(**{'benchmark|returns': bench_returns})
+        else:
+            df['benchmark|returns'] = bench_returns.reindex(df.index)
+            return df
 
     def _apply_indicators(self, df):
         """
@@ -391,6 +497,11 @@ class Data():
                 continue
 
             ind_type = spec[0]
+
+            # qka 内置指标：跳过，由 _apply_qka_indicators 集中处理
+            if _is_qka_indicator(ind_type):
+                continue
+
             args = list(spec[1:])
 
             # 收集前面连续的字符串参数作为列名（遇到第一个非字符串即停）
@@ -429,6 +540,62 @@ class Data():
                 df[col_name] = fn(df[factors[0]], *rest)
             else:
                 df[col_name] = fn(*[df[f] for f in factors], *rest)
+
+        return df
+
+    def _apply_qka_indicators(self, df):
+        """应用 qka 内置指标（带 symbol 前缀，含 benchmark 数据）。
+
+        必须在 concat + 加 benchmark 之后调用，此时列名格式为
+        {symbol}|returns 和 benchmark|returns。
+
+        Args:
+            df: 合并后的 DataFrame（列名已带 symbol 前缀）
+
+        Returns:
+            DataFrame: 含 qka 指标列
+        """
+        inds = self._indicators
+        if not inds or not isinstance(inds, dict):
+            return df
+
+        qka_specs = [
+            (col_name, spec) for col_name, spec in inds.items()
+            if isinstance(spec, (list, tuple))
+            and _is_qka_indicator(spec[0])
+        ]
+        if not qka_specs:
+            return df
+
+        if isinstance(df, dd.DataFrame):
+            sample = df.head(200)
+            meta = self._compute_qka_indicator_cols(sample, qka_specs)
+            return df.map_partitions(
+                lambda p: self._compute_qka_indicator_cols(p, qka_specs),
+                meta=meta,
+            )
+        return self._compute_qka_indicator_cols(df, qka_specs)
+
+    def _compute_qka_indicator_cols(self, df, qka_specs):
+        """在已合并的 DataFrame 上计算 qka 内置指标。"""
+        for col_key, spec in qka_specs:
+            fn_name = spec[0].split('.', 1)[1] if spec[0].startswith('qka.') else spec[0]
+            args = list(spec[1:])
+
+            try:
+                fn = getattr(indicator, fn_name)
+            except AttributeError:
+                logger.warning(f"qka 内置指标不存在: {fn_name}，跳过")
+                continue
+
+            # 为每只股票计算
+            for symbol in self.symbols:
+                col = f'{symbol}|{col_key}'
+                try:
+                    df[col] = fn(df, symbol, *args)
+                except ValueError as e:
+                    logger.warning(f"计算 {col_key} 失败: {e}")
+                    df[col] = np.nan
 
         return df
 
@@ -483,7 +650,11 @@ class Data():
         )
         if rs.error_code != '0':
             raise RuntimeError(f"baostock 查询 {symbol}({bs_code}) 失败: {rs.error_msg}")
-        df = rs.get_data()
+        # 官网标准写法：get_row_data() 逐行取 + next() 翻页，避免 get_data() 的 df.append()
+        data_list = []
+        while (rs.error_code == '0') & rs.next():
+            data_list.append(rs.get_row_data())
+        df = pd.DataFrame(data_list, columns=rs.fields) if data_list else pd.DataFrame()
 
         if len(df) == 0:
             return df

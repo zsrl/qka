@@ -2,11 +2,16 @@
 
 ## 架构
 
-| 类 | 作用 |
-|-----|------|
-| `qka.Data` | 行情数据加载 + 技术指标计算 |
-| `qka.Strategy` | 策略基类 — 实现 `on_bar` 做交易决策 |
-| `qka.Backtest` | 回测引擎 — 串联 Data 和 Strategy，注入基础设施 |
+qka 框架共五个公开类，AI 生成策略代码时不会遇到第六个。
+
+| 类 | 全限定名 | 作用 |
+|-----|------|------|
+| Data | `qka.Data` | 行情数据加载 + 指标预计算 |
+| Strategy | `qka.Strategy` | 策略基类 — 实现 `on_bar` 做交易决策 |
+| Broker | `qka.Broker` | 虚拟券商 — 执行买卖，管理资金和持仓 |
+| SizingAccessor | `qka.SizingAccessor` | 仓位计算 — 四种仓位方法 |
+| Backtest | `qka.Backtest` | 回测引擎 — 串联 Data 和 Strategy，注入基础设施 |
+| Analysis | `qka.Analysis` | 分析模块 — 常用的分析方法 |
 
 ---
 
@@ -25,6 +30,7 @@ data = Data(
     symbols=['sz.000001', 'sh.600000'],
     period='1d',
     adjust='qfq',
+    benchmark=None,
     indicators=None,
 )
 ```
@@ -34,7 +40,14 @@ data = Data(
 | `symbols` | `list[str]` | `None` | A 股代码，baostock 格式 `sz.000001`、`sh.600000` |
 | `period` | `str` | `'1d'` | 数据周期，当前仅支持 `'1d'` |
 | `adjust` | `str` | `'qfq'` | 复权方式：`'qfq'` 前复权，`'hfq'` 后复权，`'bfq'` 不复权 |
+| `benchmark` | `str` | `None` | 基准指数代码，如 `'sh.000300'`。下载后在 `get()` 结果中追加 `benchmark|returns` 列 |
 | `indicators` | `dict` | `None` | 预计算指标，见下方 |
+
+`get()` 返回的 DataFrame 除了 `open/high/low/close/volume/amount` 六大基本列外，还自动内置一列：
+
+| 常驻列 | 公式 | 说明 |
+|------|------|------|
+| `returns` | `close.diff() / close.shift(1)` | 日收益率，始终存在，无需在 indicators 中声明 |
 
 ### indicators
 
@@ -164,6 +177,40 @@ indicators={
 
 函数接收单只股票的 DataFrame（含 `open/high/low/close/volume`），返回添加了新列的 DataFrame。
 
+#### qka 内置指标
+
+qka 框架内置的滚动窗口指标，格式为 `{'列名': ('qka.函数名', 窗口, ...)}`。所有函数使用 `returns` 列计算，部分需要基准数据（`benchmark|returns`）。
+
+```python
+data = Data(
+    symbols=['sz.000001', 'sh.600000'],
+    benchmark='sh.000300',  # alpha/beta/information_ratio 必需
+    indicators={
+        'sma_20':   ('ta.trend.sma_indicator', 'close', 20),
+        'beta_60':  ('qka.beta', 60),
+        'alpha_60': ('qka.alpha', 60),
+        'sharpe_60':('qka.sharpe', 60),
+        'mdd_60':   ('qka.max_drawdown', 60),
+        'ir_60':    ('qka.information_ratio', 60),
+        'zigzag_60':('rolling_zigzag', 60, 0.3, 1600),
+    },
+)
+```
+
+| 函数 | 需要 benchmark | 说明 |
+|------|:---:|------|
+| `qka.beta` | ✅ | 滚动 β，公式 `Cov(Rp,Rm) / Var(Rm)` |
+| `qka.alpha` | ✅ | 滚动詹森 α（年化），公式 `Rp - [Rf + β·(Rm-Rf)]` |
+| `qka.sharpe` | ❌ | 滚动夏普比率（年化），公式 `(Rp-Rf) / σp` |
+| `qka.max_drawdown` | ❌ | 滚动窗口最大回撤，返回负数（如 -0.15） |
+| `qka.information_ratio` | ✅ | 滚动信息比率（年化），公式 `mean(Rp-Rm) / std(Rp-Rm)` |
+| `rolling_zigzag` | ❌ | 滚动窗口 Zigzag 趋势方向，HP 滤波+Zigzag 状态机，输出 1（上行）/-1（下行）/NaN |
+
+- `rolling_zigzag` 签名：`('rolling_zigzag', window, threshold, lamb)`，默认 `threshold=0.3` `lamb=1600`，需要 `{symbol}|close` 列
+- 无 `rf` 参数时默认 `0`，无 `periods_per_year` 时默认 `252`
+- 需要 benchmark 的函数在 `Data` 未设 `benchmark` 时抛 `ValueError`
+- 每个函数独立计算，即使 α 和 β 内部都跑 OLS 也不共享结果（与 ta 库 BBands 三函数一致）
+
 ### get()
 
 `get(lazy=False, start_date=None, end_date=None) → pd.DataFrame`
@@ -186,13 +233,40 @@ df = data.get(start_date='2024-01-01', end_date='2024-12-31')
 | 类型 | `pd.DataFrame`（`lazy=True` 时返回 `dask.DataFrame`） |
 | 索引 | 日期索引，**索引名为 `"date"`**。`reset_index()` 后日期列名也是 `"date"` |
 | 列名 | `{symbol}|{factor}` — 例如 `sz.000001|close`、`sz.000001|sma_5`、`sh.600000|volume` |
+| 常驻列 | 除 `open/high/low/close/volume/amount` 外，自动内置 `{symbol}|returns` |
+| 基准列 | 若构造时设了 `benchmark`，追加 `benchmark|returns`（无 `{symbol}|` 前缀） |
 | 列值 | 全部为 `float64`，指标列的早期行可能含 `NaN` |
 | 异常 | 无数据时抛出 `RuntimeError` |
 
+**返回的宽表示例：**
+
+```python
+data = Data(symbols=['sz.000001', 'sh.600000'], indicators={
+    'sma_5': ('ta.trend.sma_indicator', 'close', 5),
+})
+df = data.get(start_date='2024-01-02', end_date='2024-01-05')
+```
+
+返回的 DataFrame 结构（行=日期，列=每只股票的完整字段堆叠）：
+
+```
+            sz.000001|open  sz.000001|close  ...  sz.000001|sma_5  sh.600000|open  sh.600000|close  ...  sh.600000|sma_5
+2024-01-02           10.0             10.2  ...            NaN            15.0             15.3  ...            NaN
+2024-01-03           10.1             10.5  ...            NaN            15.2             15.6  ...            NaN
+2024-01-04           10.3             10.8  ...            NaN            14.9             15.1  ...            NaN
+2024-01-05           10.2             10.6  ...            NaN            15.4             15.9  ...            NaN
+```
+
+- 每只股票独占一组列，列前缀 = symbol
+- `returns` 列自动存在，无需在 indicators 中声明
+- 前 4 行 SMA 为 NaN（窗口=5，不足）
+- 若设了 `benchmark='sh.000300'`，末尾多一列 `benchmark|returns`
+
 ```python
 # 列名格式：{symbol}|{factor}
-df.columns  # ['sz.000001|open', 'sz.000001|close', 'sz.000001|sma_5',
-            #  'sh.600000|open', 'sh.600000|close', ...]
+df.columns  # ['sz.000001|open', 'sz.000001|close', 'sz.000001|returns',
+            #  'sz.000001|sma_5', 'sh.600000|open', 'sh.600000|close',
+            #  'sh.600000|returns', 'sh.600000|sma_5']
 
 # 索引名为 "date"，reset_index 后转为 pd.Timestamp 列
 df = df.reset_index()
@@ -201,6 +275,67 @@ df['date'].iloc[0]          # Timestamp('2024-01-02 00:00:00')
 # 输出 JSON 前需转为字符串
 df['date'] = df['date'].dt.strftime('%Y-%m-%d')
 df['date'].iloc[0]          # '2024-01-02'
+```
+
+---
+
+## Broker
+
+虚拟券商，由 `Backtest.run()` 在执行时创建并注入到 `strategy.broker`。用户不直接构造。
+
+### 属性
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `broker.cash` | `float` | 当前可用现金 |
+| `broker.positions` | `dict` | `{symbol: {'size': int, 'avg_price': float}}` |
+
+### buy()
+
+`buy(symbol: str, price: float, size: int) → bool`
+
+买入，`size` 必须是 100 的整数倍（A 股 1 手 = 100 股）。
+
+```python
+success = self.broker.buy('sz.000001', float(close['sz.000001']), 100)
+```
+
+- 实际成交价 = `price * (1 + slippage)`（默认滑点 0.1%）
+- 自动扣佣金（万 2.5，最低 5 元）
+- 资金不足返回 `False`
+- `price <= 0` 返回 `False`（前复权可能导致早期价格为负）
+
+### sell()
+
+`sell(symbol: str, price: float, size: int) → bool`
+
+卖出，`size` 必须是 100 的整数倍。
+
+```python
+success = self.broker.sell('sz.000001', float(close['sz.000001']), 100)
+```
+
+- 自动扣佣金 + 印花税（万 5，仅卖出）
+- 持仓不足返回 `False`
+
+---
+
+## SizingAccessor
+
+仓位计算器，由 `Backtest.run()` 在执行时创建并注入到 `strategy.sizing`。返回值已按手取整（100 的倍数）。
+
+| 方法 | 说明 |
+|------|------|
+| `percent(ratio, price)` | 用可用现金的 `ratio` 比例买入。`ratio` 在 0~1 之间 |
+| `fixed_amount(amount, price)` | 固定金额买入 |
+| `fixed_shares(n)` | 固定股数 |
+| `atr_risk(risk_ratio, price, atr_value, multiplier=2.0)` | ATR 风险仓位 |
+
+```python
+price = float(close['sz.000001'])
+size = self.sizing.percent(0.1, price)  # 10% 仓位，已按手取整
+if size > 0:
+    self.broker.buy('sz.000001', price, size)
 ```
 
 ---
@@ -282,60 +417,9 @@ hist = self.history('close', 20)  # 最近 20 天的收盘价
 | 列 | 股票代码 |
 | 异常 | 因子不存在时返回空 DataFrame（有索引无列），不抛异常 |
 
-### self.broker
+### self.broker / self.sizing
 
-虚拟券商，管理资金和持仓。提供 `buy` / `sell` 两个交易方法。
-
-| 属性 | 说明 |
-|------|------|
-| `self.broker.cash` | 当前可用现金 |
-| `self.broker.positions` | `{symbol: {'size': int, 'avg_price': float}}` |
-
-#### buy
-
-`buy(symbol: str, price: float, size: int) → bool`
-
-买入，`size` 必须是 100 的整数倍（A 股 1 手 = 100 股）。
-
-```python
-success = self.broker.buy('sz.000001', float(close['sz.000001']), 100)
-```
-
-- 实际成交价 = `price * (1 + slippage)`（默认滑点 0.1%）
-- 自动扣佣金（万 2.5，最低 5 元）
-- 资金不足返回 `False`
-- `price <= 0` 返回 `False`（前复权可能导致早期价格为负）
-
-#### sell
-
-`sell(symbol: str, price: float, size: int) → bool`
-
-卖出，`size` 必须是 100 的整数倍。
-
-```python
-success = self.broker.sell('sz.000001', float(close['sz.000001']), 100)
-```
-
-- 自动扣佣金 + 印花税（万 5，仅卖出）
-- 持仓不足返回 `False`
-
-### self.sizing
-
-仓位计算。**返回值已经是按手取整（100 的倍数）**。
-
-| 方法 | 说明 |
-|------|------|
-| `percent(ratio, price)` | 用可用现金的 `ratio` 比例买入。`ratio` 在 0~1 之间 |
-| `fixed_amount(amount, price)` | 固定金额买入 |
-| `fixed_shares(n)` | 固定股数 |
-| `atr_risk(risk_ratio, price, atr_value, multiplier=2.0)` | ATR 风险仓位 |
-
-```python
-price = float(close['sz.000001'])
-size = self.sizing.percent(0.1, price)  # 10% 仓位，已按手取整
-if size > 0:
-    self.broker.buy('sz.000001', price, size)
-```
+由 `Backtest.run()` 注入（见上方注入表），通过 `self.broker.buy()` / `self.broker.sell()` 和 `self.sizing.percent()` 等方法使用。详见 [Broker](#broker) 和 [SizingAccessor](#sizingaccessor) 独立章节。
 
 ### 完整示例
 
@@ -523,5 +607,125 @@ class MaCross(Strategy):
 bt = Backtest(data, MaCross())
 bt.run(cash=200000, start_date='2024-01-01')
 print(bt.metrics['total_return_pct'])
+```
+
+---
+
+## Analysis
+
+分析模块，收纳常用的分析方法。
+
+### 导入
+
+```python
+from qka import Analysis
+```
+
+构造无参数：
+
+```python
+analysis = Analysis()
+```
+
+### zigzag()
+
+`zigzag(series, threshold=0.3, min_days=90, lamb=1600) → list[Segment]`
+
+HP 滤波 + Zigzag 趋势分段。对价格序列做 Hodrick–Prescott 滤波去噪后，在趋势线上识别交替的上行/下行段。
+
+⚠️ 包含未来函数，仅供事后分析，禁止用于回测策略。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `series` | `pd.Series` | 必填 | 价格序列，index 为日期，values 为价格 |
+| `threshold` | `float` | `0.3` | 反转阈值。峰顶回落 30% 确认顶，谷底反弹 30% 确认底 |
+| `min_days` | `int` | `90` | 最小段长（自然日）。短于此的段被前后段合并吸收 |
+| `lamb` | `int` | `1600` | HP 滤波平滑参数，日线数据标准值 |
+
+返回值 `list[Segment]`，每个 `Segment` 是 namedtuple：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `start` | `pd.Timestamp` | 段起始日期 |
+| `end` | `pd.Timestamp` | 段结束日期 |
+| `direction` | `str` | `'上行'` 或 `'下行'` |
+| `change` | `float` | 段内涨跌幅（百分比） |
+
+### alpha_beta()
+
+`alpha_beta(returns, bench_returns, rf=0.0, periods_per_year=252) → AlphaBeta`
+
+OLS 回归，一次返回 α 和 β。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `returns` | array-like | 必填 | 资产收益率序列 |
+| `bench_returns` | array-like | 必填 | 基准收益率序列 |
+| `rf` | `float` | `0.0` | 年化无风险利率 |
+| `periods_per_year` | `int` | `252` | 年化周期数，日线=252，周线=52 |
+
+返回值 `AlphaBeta` namedtuple：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `alpha` | `float` | 詹森 α（已年化）。正值 = 跑赢 CAPM 预测 |
+| `beta` | `float` | 市场敏感度 β = Cov(Rp,Rm) / Var(Rm) |
+
+```python
+# 用法
+from qka import Analysis
+
+analysis = Analysis()
+result = analysis.alpha_beta(
+    df['sz.000001|returns'].dropna(),
+    df['benchmark|returns'].dropna(),
+)
+print(f'α={result.alpha:.2%}, β={result.beta:.2f}')
+```
+
+### sharpe_ratio()
+
+`sharpe_ratio(returns, rf=0.0, periods_per_year=252) → float`
+
+夏普比率（年化）。公式：`(mean(Rp) - rf_period) / std(Rp) × √N`。
+
+### max_drawdown()
+
+`max_drawdown(returns) → float`
+
+最大回撤，返回正数（0.35 = 35% 回撤）。
+
+### information_ratio()
+
+`information_ratio(returns, bench_returns, periods_per_year=252) → float`
+
+信息比率（年化）。公式：`mean(Rp-Rm) / std(Rp-Rm) × √N`。衡量跑赢基准的稳定性。
+
+### 示例
+
+```python
+from qka import Data, Analysis
+
+data = Data(symbols=['sz.000001'], benchmark='sh.000300')
+df = data.get()
+
+analysis = Analysis()
+
+# 趋势分段
+segs = analysis.zigzag(df['sz.000001|close'], threshold=0.3, min_days=90)
+for s in segs:
+    print(f'{s.start.date()} ~ {s.end.date()}  {s.direction}  {s.change:+.1f}%')
+
+# 单次指标（标量，非滚动）
+ab = analysis.alpha_beta(
+    df['sz.000001|returns'].dropna(),
+    df['benchmark|returns'].dropna(),
+)
+print(f'α={ab.alpha:.2%}, β={ab.beta:.2f}')
+
+sharpe  = analysis.sharpe_ratio(df['sz.000001|returns'])
+mdd     = analysis.max_drawdown(df['sz.000001|returns'])
+ir      = analysis.information_ratio(df['sz.000001|returns'], df['benchmark|returns'])
+print(f'夏普={sharpe:.2f}, 最大回撤={mdd:.1%}, IR={ir:.2f}')
 ```
 
