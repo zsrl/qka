@@ -18,6 +18,7 @@ from qka.core.backtest import Backtest
 from qka.core.strategy import Strategy
 from qka.core.broker import Broker
 from qka.core.sizing import SizingAccessor
+from qka.core.analysis import Analysis, Segment, AlphaBeta
 
 # 子模块导入
 from qka import core, utils
@@ -25,6 +26,8 @@ from qka import core, utils
 __all__ = [
     # 核心功能
     'Data', 'Backtest', 'Strategy', 'Broker', 'DataAccessor', 'SizingAccessor',
+    # 分析
+    'Analysis', 'Segment', 'AlphaBeta',
     # 子模块
     'core', 'utils'
 ]

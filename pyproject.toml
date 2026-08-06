@@ -24,7 +24,7 @@ dependencies = [
     "dask[dataframe]>=2025.7.0",
     "ta>=0.11.0",
     "baostock>=0.9.1",
-    "pandas<3.0",
+    "statsmodels>=0.14.6",
 ]
 
 [project.optional-dependencies]
