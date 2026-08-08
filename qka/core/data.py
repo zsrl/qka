@@ -368,7 +368,16 @@ class Data():
             # 切片回用户请求的日期范围（去掉指标预热扩展部分）
             if start_date is not None and max_window > 0:
                 cutoff = pd.Timestamp(start_date)
-                ddf = ddf.loc[ddf.index >= cutoff]
+                # FIX(lazy-loc) 原代码（有 bug）：
+                #   ddf = ddf.loc[ddf.index >= cutoff]
+                #   对 concat(axis=1, outer) 合并帧做“全局 index 布尔掩码”过滤时，
+                #   dask_expr 需把合并索引物化为 dask-array（FromGraph/ArrowStringConversion），
+                #   其中 index 提取的 getattr 节点在优化中被丢弃，
+                #   调度器报 ValueError: Missing dependency (getattr-...) for dependents (...)。
+                # 修复：改为“分区内过滤”——逐分区 p 做 pandas 行过滤。
+                # 等价性：过滤条件逐行判断 index>=cutoff，与全局过滤结果完全一致
+                #（已对 pandas 真值验证）；且不物化全局索引，绕开 dask_expr 的 bug。
+                ddf = ddf.map_partitions(lambda p: p[p.index >= cutoff])
 
             # 基准数据
             if self.benchmark:
