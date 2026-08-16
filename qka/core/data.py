@@ -368,7 +368,7 @@ class Data():
             # 切片回用户请求的日期范围（去掉指标预热扩展部分）
             if start_date is not None and max_window > 0:
                 cutoff = pd.Timestamp(start_date)
-                ddf = ddf.loc[ddf.index >= cutoff]
+                ddf = ddf.loc[cutoff:]
 
             # 基准数据
             if self.benchmark:
