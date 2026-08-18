@@ -77,6 +77,8 @@ df['sz.000001|peTTM']   # 市盈率(TTM)，float64
 注意事项：
 
 - 首次下载后缓存字段固定。若先以无 `extra_fields` 下载、之后再传入 `extra_fields`，qka 会自动检测缓存缺列并重新下载对应股票
+- **列只增不减**：同一 `datadir` 下用不同 `extra_fields` 配置共享缓存时，重下会带上缓存已有扩展列（并集），不会互相覆盖。如先 `extra_fields=['peTTM']` 再 `extra_fields=['pbMRQ']`，缓存最终包含 `peTTM` 和 `pbMRQ` 两列
+- 无 `extra_fields` 的 `Data` 读取共享缓存时，也会看到缓存中已下载的全部扩展列
 - 停牌日部分字段可能为空（转为 `NaN`）
 - 基准 `benchmark` 同样受 `extra_fields` 影响（同一套下载逻辑），但通常不需要
 - 数据源为 baostock 时 `extra_fields` 才生效；其他数据源忽略该参数

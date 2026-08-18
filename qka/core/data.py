@@ -120,14 +120,16 @@ class Data():
         self.source = source
         self.pool_size = pool_size
 
-        # extra_fields 白名单校验
-        self.extra_fields = list(extra_fields or [])
-        invalid = [f for f in self.extra_fields if f not in self.BAOSTOCK_EXTRA_FIELDS]
-        if invalid:
-            raise ValueError(
-                f"extra_fields 含不支持的字段: {invalid}。"
-                f"可选: {self.BAOSTOCK_EXTRA_FIELDS}"
-            )
+        # extra_fields 白名单校验 + 去重
+        self.extra_fields = []
+        for f in (extra_fields or []):
+            if f not in self.BAOSTOCK_EXTRA_FIELDS:
+                raise ValueError(
+                    f"extra_fields 含不支持的字段: {f}。"
+                    f"可选: {self.BAOSTOCK_EXTRA_FIELDS}"
+                )
+            if f not in self.extra_fields:
+                self.extra_fields.append(f)
 
         # 统一处理 indicators 参数
         if callable(indicators):
@@ -165,6 +167,25 @@ class Data():
             return True
         return any(f not in cols for f in self.extra_fields)
 
+    def _merged_extra_fields(self, path: Path) -> List[str]:
+        """
+        计算本次下载实际请求的扩展字段：当前 extra_fields 与缓存已有扩展列的并集。
+
+        保证同一 datadir 下不同 extra_fields 配置共享缓存时，列只增不减、
+        不互相覆盖（第一次只有 peTTM，第二次再加 pbMRQ 时 peTTM 仍保留）。
+        """
+        merged = list(self.extra_fields)
+        if not path.exists():
+            return merged
+        try:
+            existing = set(pq.read_schema(path).names)
+        except Exception:
+            return merged
+        for f in self.BAOSTOCK_EXTRA_FIELDS:
+            if f in existing and f not in merged:
+                merged.append(f)
+        return merged
+
     def _download(
         self, symbol: str,
         download_start: str = None,
@@ -192,12 +213,16 @@ class Data():
         default_start = '1990-01-01'
         default_end = pd.Timestamp.now().strftime("%Y-%m-%d")
 
+        # 实际请求的扩展字段 = 当前配置 ∪ 缓存已有扩展列（列只增不减，不互相覆盖）
+        merged_extra = self._merged_extra_fields(path)
+
         # ── 首次下载：只拉请求范围（缓存缺失 extra_fields 列时也全量重下）──
         if not path.exists() or self._cache_missing_extra_fields(path):
             df = self._get_from_baostock(
                 symbol,
                 start_date=download_start or default_start,
                 end_date=download_end or default_end,
+                extra_fields=merged_extra,
             )
             if len(df) == 0:
                 raise RuntimeError(f"{symbol}: baostock 返回空数据")
@@ -224,6 +249,7 @@ class Data():
             end_before = (cache_min - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
             df_before = self._get_from_baostock(
                 symbol, start_date=download_start, end_date=end_before,
+                extra_fields=merged_extra,
             )
             if len(df_before) > 0:
                 pieces.insert(0, df_before)
@@ -237,6 +263,7 @@ class Data():
                 symbol,
                 start_date=start_after,
                 end_date=download_end or default_end,
+                extra_fields=merged_extra,
             )
             if len(df_after) > 0:
                 pieces.append(df_after)
@@ -665,6 +692,7 @@ class Data():
         self, symbol: str,
         start_date: str = '1990-01-01',
         end_date: str = '2050-12-31',
+        extra_fields: Optional[List[str]] = None,
     ) -> pd.DataFrame:
         """
         从 baostock 获取单个股票的数据。
@@ -673,6 +701,8 @@ class Data():
             symbol: baostock 格式股票代码，如 sz.000001、sh.600000
             start_date: 起始日期，格式 YYYY-MM-DD，默认 1990-01-01
             end_date: 截止日期，格式 YYYY-MM-DD，默认 2050-12-31
+            extra_fields: 本次请求的扩展字段列表。None 时使用 self.extra_fields；
+                调用方（_download）可传入"当前配置 ∪ 缓存已有列"的并集，保证列只增不减
 
         Returns:
             pd.DataFrame: 股票数据，以 date 为索引，包含 open, high, low, close, volume, amount
@@ -682,8 +712,9 @@ class Data():
         adjust_map = {'bfq': '1', 'qfq': '2', 'hfq': '3'}
         adjustflag = adjust_map.get(self.adjust, '2')
 
-        # 基础字段 + extra_fields 扩展字段
-        fields = ",".join(["date"] + self.BAOSTOCK_BASE_FIELDS + self.extra_fields)
+        # 基础字段 + extra_fields 扩展字段（缺省用 self.extra_fields）
+        extra = list(extra_fields) if extra_fields is not None else self.extra_fields
+        fields = ",".join(["date"] + self.BAOSTOCK_BASE_FIELDS + extra)
 
         rs = bs.query_history_k_data_plus(
             symbol,
@@ -704,8 +735,8 @@ class Data():
         if len(df) == 0:
             return df
 
-        # baostock 返回的数值列是字符串，转数值类型（基础列 + extra_fields）
-        numeric_cols = self.BAOSTOCK_BASE_FIELDS + self.extra_fields
+        # baostock 返回的数值列是字符串，转数值类型（基础列 + 本次请求的扩展字段）
+        numeric_cols = self.BAOSTOCK_BASE_FIELDS + extra
         for col in numeric_cols:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
