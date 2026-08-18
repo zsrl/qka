@@ -37,6 +37,20 @@ data = Data(
 
 `extra_fields` 追加 baostock `query_history_k_data_plus` 接口支持的扩展列（选股/估值用），列名同样遵循 `{symbol}|{field}` 约定（如 `sz.000001|peTTM`），数值自动转为 `float64`。**不是指标，不参与 indicators 预计算**，是随行情一起下载的原始字段。
 
+**不传 `extra_fields` 时，每只股票默认只有 6 个行情列 + 1 个常驻列：**
+
+| 默认列 | 含义 |
+|------|------|
+| `{symbol}|open` | 开盘价（前复权） |
+| `{symbol}|high` | 最高价 |
+| `{symbol}|low` | 最低价 |
+| `{symbol}|close` | 收盘价 |
+| `{symbol}|volume` | 成交量（股） |
+| `{symbol}|amount` | 成交额（元） |
+| `{symbol}|returns` | 日收益率（自动计算，非 baostock 原始字段） |
+
+> 注意：`open/high/low/close/volume/amount` 是 baostock 接口里的基础字段，qka 默认固定下载，**不能用 `extra_fields` 重复添加**（白名单里没有它们）；`extra_fields` 只追加上面 6 个之外的扩展列。
+
 ```python
 data = Data(
     symbols=['sz.000001'],
