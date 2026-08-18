@@ -25,12 +25,47 @@ data = Data(
 | `adjust` | `str` | `'qfq'` | 复权方式：`'qfq'` 前复权，`'hfq'` 后复权，`'bfq'` 不复权 |
 | `benchmark` | `str` | `None` | 基准指数代码，如 `'sh.000300'`。下载后在 `get()` 结果中追加 `benchmark|returns` 列 |
 | `indicators` | `dict` | `None` | 预计算指标，见下方 |
+| `extra_fields` | `list[str]` | `None` | baostock 扩展字段（选股/估值用），见下方 |
 
 `get()` 返回的 DataFrame 除了 `open/high/low/close/volume/amount` 六大基本列外，还自动内置一列：
 
 | 常驻列 | 公式 | 说明 |
 |------|------|------|
 | `returns` | `close.diff() / close.shift(1)` | 日收益率，始终存在，无需在 indicators 中声明 |
+
+### extra_fields 扩展字段
+
+`extra_fields` 追加 baostock `query_history_k_data_plus` 接口支持的扩展列（选股/估值用），列名同样遵循 `{symbol}|{field}` 约定（如 `sz.000001|peTTM`），数值自动转为 `float64`。**不是指标，不参与 indicators 预计算**，是随行情一起下载的原始字段。
+
+```python
+data = Data(
+    symbols=['sz.000001'],
+    extra_fields=['peTTM', 'pbMRQ', 'turn'],   # 选股常用：估值 + 换手率
+)
+df = data.get(start_date='2024-01-02', end_date='2024-01-05')
+df['sz.000001|peTTM']   # 市盈率(TTM)，float64
+```
+
+可用的扩展字段（白名单，传其他字段会抛 `ValueError`）：
+
+| 字段 | 含义 | 典型用途 |
+|------|------|---------|
+| `preclose` | 前收盘价 | 计算跳空 |
+| `turn` | 换手率(%) | 活跃度筛选 |
+| `tradestatus` | 交易状态（1=正常，0=停牌） | 剔除停牌股 |
+| `pctChg` | 涨跌幅(%) | 动量筛选 |
+| `isST` | 是否 ST（1=是，0=否） | 剔除 ST |
+| `peTTM` | 市盈率(TTM) | 估值筛选 |
+| `pbMRQ` | 市净率(MRQ) | 估值筛选 |
+| `psTTM` | 市销率(TTM) | 估值筛选 |
+| `pcfNcfTTM` | 市现率(TTM) | 估值筛选 |
+
+注意事项：
+
+- 首次下载后缓存字段固定。若先以无 `extra_fields` 下载、之后再传入 `extra_fields`，qka 会自动检测缓存缺列并重新下载对应股票
+- 停牌日部分字段可能为空（转为 `NaN`）
+- 基准 `benchmark` 同样受 `extra_fields` 影响（同一套下载逻辑），但通常不需要
+- 数据源为 baostock 时 `extra_fields` 才生效；其他数据源忽略该参数
 
 ### indicators
 
@@ -217,6 +252,7 @@ df = data.get(start_date='2024-01-01', end_date='2024-12-31')
 | 索引 | 日期索引，**索引名为 `"date"`**。`reset_index()` 后日期列名也是 `"date"` |
 | 列名 | `{symbol}|{factor}` — 例如 `sz.000001|close`、`sz.000001|sma_5`、`sh.600000|volume` |
 | 常驻列 | 除 `open/high/low/close/volume/amount` 外，自动内置 `{symbol}|returns` |
+| 扩展列 | 构造时设了 `extra_fields` 时，追加 `{symbol}|{field}` 原始字段列（如 `sz.000001|peTTM`），见上方 extra_fields 小节 |
 | 基准列 | 若构造时设了 `benchmark`，追加 `benchmark|returns`（无 `{symbol}|` 前缀） |
 | 列值 | 全部为 `float64`，指标列的早期行可能含 `NaN` |
 | 异常 | 无数据时抛出 `RuntimeError` |
