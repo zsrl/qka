@@ -132,6 +132,7 @@ class Backtest:
                         for factor, data in by_factor.items():
                             self.strategy._data.push(dt, factor, data)
                         # dask 路径：策略使用 self.get() / self.history()
+                        self.strategy.broker.timestamp = dt
                         self.strategy.on_bar(dt)
                         self.strategy.broker.on_bar(
                             dt, self.strategy._data.get
@@ -143,6 +144,7 @@ class Backtest:
                     by_factor = self._parse_row(row)
                     for factor, data in by_factor.items():
                         self.strategy._data.push(date, factor, data)
+                    self.strategy.broker.timestamp = date
                     self.strategy.on_bar(date)
                     self.strategy.broker.on_bar(
                         date, self.strategy._data.get
@@ -154,6 +156,7 @@ class Backtest:
                 by_factor = self._parse_row(row)
                 for factor, data in by_factor.items():
                     self.strategy._data.push(date, factor, data)
+                self.strategy.broker.timestamp = date
                 self.strategy.on_bar(date)
                 self.strategy.broker.on_bar(
                     date, self.strategy._data.get

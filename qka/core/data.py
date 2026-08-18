@@ -45,8 +45,24 @@ class Data():
         pool_size (int): 并发下载线程数
         datadir (Path): 数据缓存目录
         target_dir (Path): 目标存储目录
+        extra_fields (List[str]): baostock 扩展字段（选股/估值用），如 ['peTTM', 'pbMRQ', 'turn']
     """
     
+    # baostock query_history_k_data_plus 完整支持的基础字段（除 date 索引外）
+    BAOSTOCK_BASE_FIELDS = ["open", "high", "low", "close", "volume", "amount"]
+    # 可通过 extra_fields 追加的扩展字段白名单（行情/估值/选股类）
+    BAOSTOCK_EXTRA_FIELDS = [
+        "preclose",    # 前收盘价
+        "turn",        # 换手率(%)
+        "tradestatus", # 交易状态(1=正常, 0=停牌)
+        "pctChg",      # 涨跌幅(%)
+        "isST",        # 是否 ST(1=是, 0=否)
+        "peTTM",       # 市盈率(TTM)
+        "pbMRQ",       # 市净率(MRQ)
+        "psTTM",       # 市销率(TTM)
+        "pcfNcfTTM",   # 市现率(TTM)
+    ]
+
     def __init__(
         self, 
         symbols: Optional[List[str]] = None,
@@ -57,6 +73,7 @@ class Data():
         pool_size: int = 10,
         datadir: Optional[Path] = None,
         indicators: Optional[dict] = None,
+        extra_fields: Optional[List[str]] = None,
     ):
         """
         初始化数据对象
@@ -71,6 +88,10 @@ class Data():
             pool_size: 并发下载线程数
             datadir: 缓存目录路径
             indicators: 预计算指标/因子，支持三种格式：
+            extra_fields: baostock 扩展字段列表（选股/估值用，如 ['peTTM', 'pbMRQ', 'turn']），
+                可选值见 BAOSTOCK_EXTRA_FIELDS。追加的列同样遵循 {symbol}|{field} 命名，
+                如 'sh.600000|peTTM'。注意：首次下载后缓存字段固定，变更 extra_fields
+                会自动检测列缺失并重新下载对应股票。
                 
                 **1. 字典（混搭 ta 函数和自定义因子）：**
                 ```python
@@ -99,6 +120,17 @@ class Data():
         self.source = source
         self.pool_size = pool_size
 
+        # extra_fields 白名单校验 + 去重
+        self.extra_fields = []
+        for f in (extra_fields or []):
+            if f not in self.BAOSTOCK_EXTRA_FIELDS:
+                raise ValueError(
+                    f"extra_fields 含不支持的字段: {f}。"
+                    f"可选: {self.BAOSTOCK_EXTRA_FIELDS}"
+                )
+            if f not in self.extra_fields:
+                self.extra_fields.append(f)
+
         # 统一处理 indicators 参数
         if callable(indicators):
             # 函数形式 → 保存为 callable
@@ -125,6 +157,35 @@ class Data():
         self.target_dir = self.datadir / self.source / self.period / (self.adjust or "bfq")
         self.target_dir.mkdir(parents=True, exist_ok=True)
 
+    def _cache_missing_extra_fields(self, path: Path) -> bool:
+        """检查已有 parquet 缓存是否缺少 extra_fields 指定的列。"""
+        if not self.extra_fields or not path.exists():
+            return False
+        try:
+            cols = set(pq.read_schema(path).names)
+        except Exception:
+            return True
+        return any(f not in cols for f in self.extra_fields)
+
+    def _merged_extra_fields(self, path: Path) -> List[str]:
+        """
+        计算本次下载实际请求的扩展字段：当前 extra_fields 与缓存已有扩展列的并集。
+
+        保证同一 datadir 下不同 extra_fields 配置共享缓存时，列只增不减、
+        不互相覆盖（第一次只有 peTTM，第二次再加 pbMRQ 时 peTTM 仍保留）。
+        """
+        merged = list(self.extra_fields)
+        if not path.exists():
+            return merged
+        try:
+            existing = set(pq.read_schema(path).names)
+        except Exception:
+            return merged
+        for f in self.BAOSTOCK_EXTRA_FIELDS:
+            if f in existing and f not in merged:
+                merged.append(f)
+        return merged
+
     def _download(
         self, symbol: str,
         download_start: str = None,
@@ -135,6 +196,7 @@ class Data():
 
         首次下载只拉请求范围（非全量）。已存在时检查缓存覆盖范围，
         只补下载缺失的部分（前面缺失补前面，后面缺失补后面），合并去重写回。
+        若缓存缺少 extra_fields 指定的列（如从无扩展字段升级到有），则全量重新下载。
 
         Args:
             symbol: 股票代码
@@ -151,12 +213,16 @@ class Data():
         default_start = '1990-01-01'
         default_end = pd.Timestamp.now().strftime("%Y-%m-%d")
 
-        # ── 首次下载：只拉请求范围 ──
-        if not path.exists():
+        # 实际请求的扩展字段 = 当前配置 ∪ 缓存已有扩展列（列只增不减，不互相覆盖）
+        merged_extra = self._merged_extra_fields(path)
+
+        # ── 首次下载：只拉请求范围（缓存缺失 extra_fields 列时也全量重下）──
+        if not path.exists() or self._cache_missing_extra_fields(path):
             df = self._get_from_baostock(
                 symbol,
                 start_date=download_start or default_start,
                 end_date=download_end or default_end,
+                extra_fields=merged_extra,
             )
             if len(df) == 0:
                 raise RuntimeError(f"{symbol}: baostock 返回空数据")
@@ -183,6 +249,7 @@ class Data():
             end_before = (cache_min - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
             df_before = self._get_from_baostock(
                 symbol, start_date=download_start, end_date=end_before,
+                extra_fields=merged_extra,
             )
             if len(df_before) > 0:
                 pieces.insert(0, df_before)
@@ -196,6 +263,7 @@ class Data():
                 symbol,
                 start_date=start_after,
                 end_date=download_end or default_end,
+                extra_fields=merged_extra,
             )
             if len(df_after) > 0:
                 pieces.append(df_after)
@@ -220,7 +288,7 @@ class Data():
         缓存不存在、不覆盖请求范围、或需要拉最新数据时返回 True。
         """
         path = self.target_dir / f"{symbol}.parquet"
-        if not path.exists():
+        if not path.exists() or self._cache_missing_extra_fields(path):
             return True
         if self.source != 'baostock':
             return False
@@ -624,6 +692,7 @@ class Data():
         self, symbol: str,
         start_date: str = '1990-01-01',
         end_date: str = '2050-12-31',
+        extra_fields: Optional[List[str]] = None,
     ) -> pd.DataFrame:
         """
         从 baostock 获取单个股票的数据。
@@ -632,17 +701,24 @@ class Data():
             symbol: baostock 格式股票代码，如 sz.000001、sh.600000
             start_date: 起始日期，格式 YYYY-MM-DD，默认 1990-01-01
             end_date: 截止日期，格式 YYYY-MM-DD，默认 2050-12-31
+            extra_fields: 本次请求的扩展字段列表。None 时使用 self.extra_fields；
+                调用方（_download）可传入"当前配置 ∪ 缓存已有列"的并集，保证列只增不减
 
         Returns:
-            pd.DataFrame: 股票数据，以 date 为索引，包含 open, high, low, close, volume, amount 列
+            pd.DataFrame: 股票数据，以 date 为索引，包含 open, high, low, close, volume, amount
+            及 extra_fields 指定的扩展列（如有）
         """
         # adjustflag: 1=不复权, 2=前复权, 3=后复权
         adjust_map = {'bfq': '1', 'qfq': '2', 'hfq': '3'}
         adjustflag = adjust_map.get(self.adjust, '2')
 
+        # 基础字段 + extra_fields 扩展字段（缺省用 self.extra_fields）
+        extra = list(extra_fields) if extra_fields is not None else self.extra_fields
+        fields = ",".join(["date"] + self.BAOSTOCK_BASE_FIELDS + extra)
+
         rs = bs.query_history_k_data_plus(
             symbol,
-            "date,open,high,low,close,volume,amount",
+            fields,
             start_date=start_date,
             end_date=end_date,
             frequency='d',
@@ -659,8 +735,8 @@ class Data():
         if len(df) == 0:
             return df
 
-        # baostock 返回的数值列是字符串，转数值类型
-        numeric_cols = ["open", "high", "low", "close", "volume", "amount"]
+        # baostock 返回的数值列是字符串，转数值类型（基础列 + 本次请求的扩展字段）
+        numeric_cols = self.BAOSTOCK_BASE_FIELDS + extra
         for col in numeric_cols:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
