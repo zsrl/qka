@@ -74,6 +74,7 @@ class Data():
         datadir: Optional[Path] = None,
         indicators: Optional[dict] = None,
         extra_fields: Optional[List[str]] = None,
+        warmup: int = 0,
     ):
         """
         初始化数据对象
@@ -92,7 +93,11 @@ class Data():
                 可选值见 BAOSTOCK_EXTRA_FIELDS。追加的列同样遵循 {symbol}|{field} 命名，
                 如 'sh.600000|peTTM'。注意：首次下载后缓存字段固定，变更 extra_fields
                 会自动检测列缺失并重新下载对应股票。
-                
+
+            warmup: 指标预热天数（默认 0）。回测/取数时自动多读取 warmup 个交易日的历史数据
+                用于计算指标，使第 1 个交易日即可拿到有效指标值，无需在策略里手写
+                `if len(hist) < N: continue` 跳过前 N 根 bar。仅用于计算，不会增加 on_bar 调用次数。
+
                 **1. 字典（混搭 ta 函数和自定义因子）：**
                 ```python
                 {
@@ -119,6 +124,7 @@ class Data():
         self.adjust = adjust
         self.source = source
         self.pool_size = pool_size
+        self.warmup = warmup
 
         # extra_fields 白名单校验 + 去重
         self.extra_fields = []
@@ -668,12 +674,13 @@ class Data():
         return df
 
     def _min_rows_for_indicators(self):
-        """计算所有指标所需的最小行数。
+        """计算所有指标所需的最小行数（含显式预热天数）。
 
-        遍历所有指标条目的整数参数，取最大值作为窗口上限的保守估计。
+        遍历所有指标条目的整数参数，取最大值作为窗口上限的保守估计，
+        再与显式 warmup 取较大者。
         """
         if not self._indicators or not isinstance(self._indicators, dict):
-            return 0
+            return self.warmup
         max_window = 0
         for spec in self._indicators.values():
             if callable(spec) or not isinstance(spec, (list, tuple)):
@@ -686,7 +693,7 @@ class Data():
             for v in rest[idx:]:
                 if isinstance(v, int):
                     max_window = max(max_window, v)
-        return max_window
+        return max(max_window, self.warmup)
 
     def _get_from_baostock(
         self, symbol: str,

@@ -26,6 +26,19 @@ data = Data(
 | `benchmark` | `str` | `None` | 基准指数代码，如 `'sh.000300'`。下载后在 `get()` 结果中追加 `benchmark|returns` 列 |
 | `indicators` | `dict` | `None` | 预计算指标，见下方 |
 | `extra_fields` | `list[str]` | `None` | baostock 扩展字段（选股/估值用），见下方 |
+| `warmup` | `int` | `0` | 指标预热天数。回测/取数时自动多读 `warmup` 个交易日历史用于计算指标，使第 1 个交易日即拿到有效指标值（无需手写跳过前 N 根 bar）。仅用于计算，不增加回测 bar 数 |
+
+> **warmup（指标预热）**：若指标/因子需要较长历史窗口（如动量排名需看前 200 天），设 `warmup=200`。
+> qka 会在 `[start_date, end_date]` 之前额外多读 `warmup` 天数据用于计算指标，但返回和回测仍严格从
+> `start_date` 起——策略第 1 个 bar 指标即有值，无需 `continue` 跳过前 N 根 bar。
+>
+> ```python
+> data = Data(
+>     symbols=['sz.000001'],
+>     indicators={'mom200': lambda df: df['close'].pct_change(200)},
+>     warmup=200,   # 自定义指标 qka 推断不出窗口，显式声明预热天数
+> )
+> ```
 
 `get()` 返回的 DataFrame 除了 `open/high/low/close/volume/amount` 六大基本列外，还自动内置一列：
 

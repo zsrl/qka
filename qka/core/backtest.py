@@ -79,7 +79,7 @@ class Backtest:
 
     def run(self, cash: float = 100000.0,
             start_date: str = None, end_date: str = None,
-            benchmark: Optional[str] = None):
+            benchmark: Optional[str] = None, warmup: int = 0):
         """
         执行回测
 
@@ -95,6 +95,10 @@ class Backtest:
             end_date: 回测截止日期 YYYY-MM-DD，None 表示数据最晚日期
             benchmark: 基准代码，如 '000300.SH'（沪深300）。
                        如果提供，会下载基准数据用于对比。
+            warmup: 指标预热天数（默认 0）。自动多读取 warmup 个交易日的历史数据用于
+                   计算指标，使策略从第一个交易日起即拿到有效指标值，无需手写
+                   warmup guard 跳过前 N 根 bar。仅用于计算，on_bar 调用次数不变。
+                   显式传入（>0）时覆盖 Data 构造时的 warmup 设定。
 
         Returns:
             None。回测结果保存在 self.results、self.metrics、self.trade_history 中。
@@ -104,6 +108,10 @@ class Backtest:
         self.strategy.broker = Broker(initial_cash=cash)
         self.strategy.sizing = SizingAccessor(self.strategy.broker)
         self.strategy._data = DataAccessor()
+
+        # 指标预热：run 显式传入时覆盖 Data 构造时的 warmup 设定
+        if warmup > 0:
+            self.data.warmup = warmup
 
         # 获取数据
         raw = self.data.get(lazy=True, start_date=start_date, end_date=end_date)
