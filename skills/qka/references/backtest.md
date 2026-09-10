@@ -19,7 +19,7 @@ bt = Backtest(data, strategy)
 
 ### run()
 
-`run(cash=100000.0, start_date=None, end_date=None, benchmark=None, warmup=0)`
+`run(cash=100000.0, start_date=None, end_date=None, benchmark=None)`
 
 执行回测。注入 broker/sizing/data 后遍历每个交易日，调用 `strategy.on_bar(date)`。
 
@@ -29,7 +29,6 @@ bt = Backtest(data, strategy)
 | `start_date` | `None` | 回测起始日期 `'YYYY-MM-DD'` |
 | `end_date` | `None` | 回测截止日期 |
 | `benchmark` | `None` | 基准指数代码，baostock 格式如 `'sh.000300'` |
-| `warmup` | `0` | 指标预热天数。自动多读 `warmup` 天历史计算指标，使策略第 1 个 bar 起指标即有效（无需手写 warmup guard）。on_bar 调用次数不变；显式传入（>0）时覆盖 Data 的 warmup 设定 |
 
 > 500 bar 以上自动分块迭代，避免一次性加载全量数据。
 

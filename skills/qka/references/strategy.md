@@ -24,7 +24,7 @@ class MyStrategy(Strategy):
 | `__init__` | **必须**调用 `super().__init__()`。不需要传任何参数 |
 | `on_bar` 签名 | 只有 `self` 和 `date`。**没有** `get` 参数（旧版 API，已废弃） |
 | `self.params` | **不存在**。不要写 `self.params.get('fast', 5)`，直接用实例属性 |
-| 预热 guard | **不要**手写 `if len(hist) < N: continue` 跳过前 N 根 bar。改用 `Data(warmup=N)` 或 `bt.run(warmup=N)`，qka 自动多读历史计算指标 |
+| 预热 guard | **不要**手写 `if len(hist) < N: continue` 跳过前 N 根 bar。改用 `Data(warmup=N)`，qka 自动多读历史计算指标 |
 
 `Backtest.run()` 在执行时注入以下属性：
 
@@ -79,14 +79,12 @@ hist = self.history('close', 20)  # 最近 20 天的收盘价
 ### 指标预热（warmup）
 
 若策略用到的指标/因子需要较长历史窗口（如动量排名需看前 200 天数据），**不要**在 `on_bar` 里
-手写 `if len(hist) < N: continue` 跳过前 N 根 bar。改用 `Data(warmup=N)` 或 `bt.run(warmup=N)`，
+手写 `if len(hist) < N: continue` 跳过前 N 根 bar。改用 `Data(warmup=N)`，
 qka 自动在 `[start_date, end_date]` 之前多读 `warmup` 天数据用于计算指标，但回测仍从 `start_date`
 首个交易日开始（`on_bar` 调用次数不变），指标自始有效：
 
 ```python
-data = Data(symbols=[...], indicators={...}, warmup=200)   # 构造时声明
-# 或
-bt.run(warmup=200)                                          # 回测时声明（覆盖 Data 的设定）
+data = Data(symbols=[...], indicators={...}, warmup=200)   # 构造时声明预热天数
 ```
 
 > 注意：qka 只能从 ta 指标的整数参数自动推断预热窗口；自定义 lambda 指标推断不到，
