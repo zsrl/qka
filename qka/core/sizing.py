@@ -63,10 +63,14 @@ class SizingAccessor:
         """
         固定金额。
         
-        计算 amount 能买多少股，向下按手取整。
+        计算 amount 能买多少股（预留滑点与佣金，保证买入总成本不超过 amount），
+        向下按手取整。
+        
+        注意：amount 为「总成本」上限（成交额 + 佣金），非纯「成交额」；
+        与 percent() 同口径，避免满仓时因费用超支被 Broker 拒单。
         
         Args:
-            amount: 投入金额
+            amount: 投入金额上限
             price: 每股价格
         
         Returns:
@@ -74,13 +78,22 @@ class SizingAccessor:
         """
         self._validate_positive(amount, 'amount')
         self._validate_positive(price, 'price')
-        return self._round_lot(amount / price)
+        # 以含滑点的成交价估算可买股数，再逐手下调，
+        # 确保「成交额 + 佣金」不超过 amount（与 Broker.buy 口径一致）。
+        exec_price = price * (1 + self._broker.slippage)
+        size = self._round_lot(amount / exec_price)
+        while size > 0 and self._broker.estimate_buy_cost(price, size) > amount:
+            size -= self.MIN_LOT
+        return size
 
     def percent(self, ratio: float, price: float) -> int:
         """
         资金百分比。
         
         使用可用现金的 ratio 比例买入，按手取整。
+        
+        已预留滑点与佣金：返回的股数保证买入总成本（含费用）不超过
+        cash * ratio，避免满仓时因费用超支被 Broker 拒单。
         
         Args:
             ratio: 0~1 之间的比例，如 0.1 表示 10%
@@ -93,7 +106,14 @@ class SizingAccessor:
         self._validate_positive(price, 'price')
         if self._broker.cash <= 0:
             return 0
-        return self._round_lot(self._broker.cash * ratio / price)
+        budget = self._broker.cash * ratio
+        # 以含滑点的成交价估算可买股数，再逐手下调，
+        # 确保「成交额 + 佣金」不超过预算（与 Broker.buy 口径一致）。
+        exec_price = price * (1 + self._broker.slippage)
+        size = self._round_lot(budget / exec_price)
+        while size > 0 and self._broker.estimate_buy_cost(price, size) > budget:
+            size -= self.MIN_LOT
+        return size
 
     def atr_risk(self, risk_ratio: float, price: float, atr_value: float,
                  multiplier: float = 2.0) -> int:
