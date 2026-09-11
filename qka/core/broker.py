@@ -99,6 +99,39 @@ class Broker:
             'trades': list(self.trade_history),
         }
 
+    def _buy_cost(self, price: float, size: int):
+        """
+        计算买入成本明细（滑点后执行价、成交额、佣金、总成本）。
+
+        作为买入费用的唯一来源，供 buy() 与仓位计算 estimate_buy_cost() 复用，
+        保证"预留费用"与"实际扣费"口径一致。
+
+        Returns:
+            tuple: (exec_price, amount, commission, total_cost)
+        """
+        exec_price = price * (1 + self.slippage)
+        amount = exec_price * size
+        if self.commission_rate > 0:
+            commission = max(amount * self.commission_rate, MIN_COMMISSION)
+        else:
+            commission = 0.0
+        return exec_price, amount, commission, amount + commission
+
+    def estimate_buy_cost(self, price: float, size: int) -> float:
+        """
+        预估买入总成本（含滑点与佣金）。
+
+        供仓位计算预留费用使用，口径与 buy() 完全一致。
+
+        Args:
+            price (float): 市价
+            size (int): 拟买入数量
+
+        Returns:
+            float: 总成本（成交额 + 佣金）
+        """
+        return self._buy_cost(price, size)[3]
+
     def buy(self, symbol: str, price: float, size: int) -> bool:
         """
         买入操作
@@ -121,13 +154,7 @@ class Broker:
             logger.warning(f"价格 {price:.2f} 不合法（前复权可能导致早期价格为负），跳过买入 {symbol}")
             return False
 
-        exec_price = price * (1 + self.slippage)
-        amount = exec_price * size
-        if self.commission_rate > 0:
-            commission = max(amount * self.commission_rate, MIN_COMMISSION)
-        else:
-            commission = 0.0
-        total_cost = amount + commission
+        exec_price, amount, commission, total_cost = self._buy_cost(price, size)
 
         if self.cash < total_cost:
             logger.debug(f"资金不足！需要 {total_cost:.2f}（佣金 {commission:.2f}），当前可用 {self.cash:.2f}")

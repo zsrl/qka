@@ -79,7 +79,10 @@ class Backtest:
 
     def run(self, cash: float = 100000.0,
             start_date: str = None, end_date: str = None,
-            benchmark: Optional[str] = None):
+            benchmark: Optional[str] = None,
+            commission_rate: float = None,
+            stamp_duty_rate: float = None,
+            slippage: float = None):
         """
         执行回测
 
@@ -95,13 +98,23 @@ class Backtest:
             end_date: 回测截止日期 YYYY-MM-DD，None 表示数据最晚日期
             benchmark: 基准代码，如 '000300.SH'（沪深300）。
                        如果提供，会下载基准数据用于对比。
+            commission_rate: 佣金费率，None 表示用 Broker 默认（万 2.5，最低 5 元）
+            stamp_duty_rate: 印花税率（仅卖出），None 表示用 Broker 默认（万 5）
+            slippage: 滑点比率，None 表示用 Broker 默认（0.1%）
 
         Returns:
             None。回测结果保存在 self.results、self.metrics、self.trade_history 中。
         """
         # 注入基础设施
         self.initial_cash = cash
-        self.strategy.broker = Broker(initial_cash=cash)
+        broker_kwargs = {'initial_cash': cash}
+        if commission_rate is not None:
+            broker_kwargs['commission_rate'] = commission_rate
+        if stamp_duty_rate is not None:
+            broker_kwargs['stamp_duty_rate'] = stamp_duty_rate
+        if slippage is not None:
+            broker_kwargs['slippage'] = slippage
+        self.strategy.broker = Broker(**broker_kwargs)
         self.strategy.sizing = SizingAccessor(self.strategy.broker)
         self.strategy._data = DataAccessor()
 
