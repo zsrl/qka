@@ -534,9 +534,9 @@ class Data():
 
         # 字典形式
         if isinstance(df, dd.DataFrame):
-            # 先用样本分区计算指标，获得准确的 meta（含新增的指标列）
-            # 避免 dask 在迷你分区上推理 meta 时因窗口不足而崩溃
-            sample = df.head(200)
+            # 样本行数完全由 warmup 决定（用户显式声明前置窗口），不写死兜底值。
+            # warmup=0 表示用户不预留前置数据，lambda 指标可能因此无法物化——属用户责任。
+            sample = df.head(self._min_rows_for_indicators())
             meta = self._compute_indicator_cols(sample.copy())
             return df.map_partitions(
                 lambda partition: self._compute_indicator_cols(partition.copy()),
@@ -642,7 +642,7 @@ class Data():
             return df
 
         if isinstance(df, dd.DataFrame):
-            sample = df.head(200)
+            sample = df.head(self._min_rows_for_indicators())
             meta = self._compute_qka_indicator_cols(sample, qka_specs)
             return df.map_partitions(
                 lambda p: self._compute_qka_indicator_cols(p, qka_specs),
