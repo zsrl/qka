@@ -5,6 +5,7 @@ QKA Core 模块
 
 
 # 数据相关
+from .simulate import Simulate
 from .data import Data
 from .accessor import DataAccessor
 # 回测相关
@@ -16,7 +17,7 @@ from .sizing import SizingAccessor
 
 __all__ = [
     # 数据相关
-    'Data', 'DataAccessor',
+    'Data', 'Simulate', 'DataAccessor',
     # 回测相关
     'Backtest', 'Strategy', 'Broker',
     # 仓位管理

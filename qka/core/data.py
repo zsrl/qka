@@ -13,9 +13,10 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import baostock as bs
 import dask.dataframe as dd
-from typing import List, Dict, Optional, Callable
+from typing import List, Optional, Callable, Union
 from qka.utils.logger import logger
 from qka.core import indicator
+from qka.core.simulate import Simulate
 
 # qka 内置指标裸名集合，用于 dispatch 识别（无需 qka. 前缀）
 _QKA_BUILTIN_NAMES = frozenset({
@@ -63,9 +64,26 @@ class Data():
         "pcfNcfTTM",   # 市现率(TTM)
     ]
 
+    # ── 模拟数据源默认值 ──
+    SIM_START = '2020-01-02'    # 模拟行情默认起点（调用方未给 start_date 时使用）
+    SIM_START_PRICE = 20.0      # 起始价
+    SIM_LIMIT = 0.10            # 单日涨跌幅截断（模拟涨跌停）
+    SIM_FUND_PHI = 0.97         # 基本面扰动的持续性（半衰期 ≈ 23 个交易日）
+    # 估值列参数：field -> (基准值, 对价格的对数弹性, 基本面自身对数波动(稳态 std))
+    # 弹性 = 估值随价格等比变动的比例。弹性≈1 ⇒ 估值是价格的复刻（错）；
+    # 弹性小甚至为负 ⇒ 盈利同步增长抵消了价格，估值走出自己的路（对）。
+    # 目标量级参照真实缓存实测：corr(peTTM,close)≈-0.09 / pbMRQ≈+0.78 /
+    # psTTM≈-0.59 / pcfNcfTTM≈-0.59。
+    SIM_EXTRA_BASE = {
+        'peTTM':     (15.0, +0.05, 0.130),
+        'pbMRQ':     (1.8,  +0.40, 0.070),
+        'psTTM':     (2.2,  -0.30, 0.120),
+        'pcfNcfTTM': (12.0, -0.80, 0.300),
+    }
+
     def __init__(
         self, 
-        symbols: Optional[List[str]] = None,
+        symbols: Optional[List[Union[str, Simulate]]] = None,
         benchmark: Optional[str] = None,
         period: str = '1d',
         adjust: str = 'qfq',
@@ -80,7 +98,22 @@ class Data():
         初始化数据对象
 
         Args:
-            symbols: 股票代码列表，baostock 格式如 ['sz.000001', 'sh.600000']
+            symbols: 标的列表，元素**可以是真实代码字符串，也可以是 Simulate 对象**。
+                真实代码用 baostock 格式，如 ['sz.000001', 'sh.600000']；Simulate 对象
+                表示一只由 qka 现场生成的模拟标的，两者可以混排。写法完全同构，区别只在
+                元素本身：
+
+                ```python
+                Data(symbols=[
+                    'sh.600900',
+                    Simulate('sim.a', drift=0.0, reversion=0.08, vol=0.018),
+                ])
+                ```
+
+                模拟标的同样支持 `indicators` / `extra_fields` / `warmup`，行为与真实源
+                一致（列名同样是 {symbol}|{field}，扩展列同样是「不请求就不生成」）。
+                模拟标的的行情区间由 get(start_date, end_date) 决定 —— 用 baostock 的
+                交易日历把区间内的真实交易日取出来，一 日一根，与真实源同构。
             benchmark: 基准代码，如 'sh.000300'。基准数据以 benchmark| 前缀加入最终 DataFrame，
                        仅供辅助计算（β/α 等），不参与指标计算
             period: 数据周期，如 '1d'（日线）、'1m'（分钟）
@@ -117,8 +150,27 @@ class Data():
                 indicators=lambda df: df.assign(ma5=df['close'].rolling(5).mean())
                 ```
                 函数接收单只股票的 DataFrame，返回添加了额外列的 DataFrame。
+
         """
-        self.symbols = symbols or []
+        # ── 归一化 symbols：str = 真实标的，Simulate 对象 = 模拟标的，可混排 ──
+        names, sim_specs = [], {}
+        for item in (symbols or []):
+            if isinstance(item, Simulate):
+                name = item.symbol
+                sim_specs[name] = item
+            elif isinstance(item, str):
+                name = item
+            else:
+                raise TypeError(
+                    f"symbols 的元素必须是 str 或 Simulate，got {type(item)}: {item!r}"
+                )
+            if name in names:
+                raise ValueError(f"symbols 中存在重复标的: {name}")
+            names.append(name)
+
+        self.symbols = names                                    # 全部标的（保持入参顺序）
+        self._sim_specs = sim_specs                             # {代码: Simulate}
+        self._real_symbols = [n for n in names if n not in sim_specs]
         self.benchmark = benchmark
         self.period = period
         self.adjust = adjust
@@ -158,10 +210,145 @@ class Data():
         else:
             self.datadir = Path(datadir)
         
-        self.datadir.mkdir(parents=True, exist_ok=True)
+        # 只有真实标的才需要缓存目录；纯模拟标的（_real_symbols 为空）不落盘
+        if self._real_symbols:
+            self.datadir.mkdir(parents=True, exist_ok=True)
 
         self.target_dir = self.datadir / self.source / self.period / (self.adjust or "bfq")
-        self.target_dir.mkdir(parents=True, exist_ok=True)
+        if self._real_symbols:
+            self.target_dir.mkdir(parents=True, exist_ok=True)
+
+    def _trading_index(self, start_date: str, end_date: str) -> pd.DatetimeIndex:
+        """
+        取 [start_date, end_date] 内的真实交易日，作为模拟行情的日期轴。
+
+        数据来自 baostock 的交易日历接口 query_trade_dates，故调用方需已登录。
+
+        Args:
+            start_date / end_date: 'YYYY-MM-DD'
+
+        Returns:
+            pd.DatetimeIndex，名称 'date'（与真实缓存 parquet 的索引名一致）
+
+        Raises:
+            RuntimeError: baostock 查询失败，或区间内一个交易日都没有
+        """
+        rs = bs.query_trade_dates(start_date=start_date, end_date=end_date)
+        if rs.error_code != '0':
+            raise RuntimeError(
+                f"获取交易日历失败（{start_date} ~ {end_date}）: "
+                f"[{rs.error_code}] {rs.error_msg}"
+            )
+        dates = []
+        while rs.next():
+            calendar_date, is_trading_day = rs.get_row_data()
+            if is_trading_day == '1':
+                dates.append(calendar_date)
+        if not dates:
+            raise RuntimeError(
+                f"区间内没有交易日: {start_date} ~ {end_date}，请检查日期范围"
+            )
+        idx = pd.DatetimeIndex(pd.to_datetime(dates), name='date')
+        return idx
+
+    def _generate_symbol(self, symbol: str, idx: pd.DatetimeIndex) -> pd.DataFrame:
+        """
+        生成一只模拟标的的行情数据（纯内存，不走缓存、不下载）。
+
+        对数价格按「带趋势的均值回复」演化：
+            r_t = drift + reversion * (logAnchor - logP_{t-1}) + vol * eps_t
+        eps_t ~ N(0, 1)。drift=0 且 reversion=0 时退化为纯随机游走。
+
+        Args:
+            symbol: Simulate 标的的代码
+            idx: 日期轴（真实交易日，取自 _trading_index）
+
+        Returns:
+            pd.DataFrame，索引即 idx，含 6 个基础列，
+            并按 self.extra_fields 追加扩展列 —— 与真实数据源行为一致（不给就不生成）。
+        """
+        spec = self._sim_specs[symbol]
+        drift, reversion, vol = spec.drift, spec.reversion, spec.vol
+
+        bars = len(idx)
+        rng = np.random.default_rng()   # 每次新建 ⇒ 每次调用都是新行情
+
+        # 1. 对数价格路径（锚点固定在起点价上，保证「震荡」真是围着起点来回）
+        log_p = np.empty(bars)
+        log_p[0] = np.log(self.SIM_START_PRICE)
+        anchor = log_p[0]
+        eps = rng.standard_normal(bars)
+        for t in range(1, bars):
+            log_p[t] = log_p[t - 1] + drift + reversion * (anchor - log_p[t - 1]) + vol * eps[t]
+        close = np.exp(log_p)
+
+        # 2. 涨跌停截断（相对前收），避免造出真实市场不会有的单日暴涨
+        step_ret = np.clip(np.diff(close) / close[:-1], -self.SIM_LIMIT, self.SIM_LIMIT)
+        close = np.concatenate([[close[0]], close[0] * np.cumprod(1.0 + step_ret)])
+
+        # 3. OHLC：保证 high >= max(open, close)、low <= min(open, close)
+        preclose = np.concatenate([[close[0]], close[:-1]])
+        open_ = preclose * (1.0 + rng.normal(0.0, 0.002, bars))
+        high = np.maximum(open_, close) * (1.0 + np.abs(rng.normal(0.0, 0.003, bars)))
+        low = np.minimum(open_, close) * (1.0 - np.abs(rng.normal(0.0, 0.003, bars)))
+
+        volume = rng.integers(1_000_000, 5_000_000, bars).astype(float)
+        df = pd.DataFrame({
+            'open': open_, 'high': high, 'low': low, 'close': close,
+            'volume': volume, 'amount': volume * close,
+        }, index=idx)
+
+        # 4. 扩展列：只生成请求的字段（与真实源「不给就没有」一致）
+        log_ratio = np.log(close / close[0])
+        for field in self.extra_fields:
+            if field == 'preclose':
+                df[field] = preclose
+            elif field == 'pctChg':
+                df[field] = (close / preclose - 1.0) * 100.0
+            elif field == 'tradestatus':
+                df[field] = 1
+            elif field == 'isST':
+                df[field] = 0
+            elif field == 'turn':
+                df[field] = np.abs(rng.normal(2.0, 0.6, bars))
+            elif field in self.SIM_EXTRA_BASE:
+                base, elasticity, idio_std = self.SIM_EXTRA_BASE[field]
+                # 估值 = 基准值 × 价格弹性项 × 基本面自身波动项
+                df[field] = base * np.exp(
+                    elasticity * log_ratio
+                    + self._sim_fundamental_walk(rng, bars, idio_std)
+                )
+        return df
+
+    def _sim_fundamental_walk(self, rng, bars: int, idio_std: float) -> np.ndarray:
+        """
+        生成一条「基本面」对数扰动序列（OU 均值回复过程）。
+
+        为什么需要它：真实世界里 PE = 市值 / 净利润，净利润是**独立于价格**演化
+        的慢变量，所以真实估值与股价并不同步（实测长江电力 corr(peTTM, close)
+        ≈ -0.09）。若估值列直接写成价格的等比缩放，该相关系数会逼近 +1，
+        「低 PE 买入」这类策略在模拟数据上会被等价测成「价格策略」，语义失真。
+
+        模型：z_t = phi * z_{t-1} + sigma * eps_t
+        取 sigma = idio_std * sqrt(1 - phi^2) ⇒ 稳态标准差恰为 idio_std，
+        故入参语义就是「估值对数偏离的量级」，可直接与真实数据对照。
+
+        Args:
+            rng: numpy Generator
+            bars: 生成长度
+            idio_std: 基本面自身的稳态对数波动
+
+        Returns:
+            np.ndarray，形状 (bars,)，z[0] = 0（对齐基准值起点）
+        """
+        phi = self.SIM_FUND_PHI
+        sigma = idio_std * np.sqrt(1.0 - phi * phi)
+        z = np.empty(bars)
+        z[0] = 0.0
+        eps = rng.standard_normal(bars)
+        for t in range(1, bars):
+            z[t] = phi * z[t - 1] + sigma * eps[t]
+        return z
 
     def _cache_missing_extra_fields(self, path: Path) -> bool:
         """检查已有 parquet 缓存是否缺少 extra_fields 指定的列。"""
@@ -318,13 +505,15 @@ class Data():
         """
         获取历史数据。
 
-        并发下载所有股票数据，应用因子计算，并返回合并后的数据。
+        并发下载所有股票数据，应用因子计算，并返回合并后的数据。真实标的读本地缓存
+        （必要时下载），模拟标的（Simulate）按同一日期轴现场生成 —— 两者写法完全同构。
 
         Args:
             lazy: 是否以懒加载模式返回 dask DataFrame（支持大规模数据分区迭代）。
                   默认 False，返回 compute() 后的 pandas DataFrame（向后兼容）。
             start_date: 起始日期，格式 YYYY-MM-DD。用于从缓存中截取数据范围，
-                        避免全量加载。传 None 表示从最早可用数据开始。
+                        避免全量加载。传 None 表示从最早可用数据开始；模拟标的在
+                        start_date=None 时从 SIM_START 起算。
             end_date: 截止日期，格式 YYYY-MM-DD。传 None 表示到最新可用数据。
 
         Returns:
@@ -334,6 +523,8 @@ class Data():
 
         注意：有指标时，start_date 会自动向后扩展 max_window 个交易日读取缓存，
         确保指标有足够的预热数据。最终返回的 DataFrame 仍严格限定在 [start_date, end_date]。
+
+        模拟标的的日期轴取自 baostock 交易日历（区间内一日一根），因此需要能登录 baostock。
         """
         if not self.symbols:
             return pd.DataFrame()
@@ -364,8 +555,8 @@ class Data():
         download_start = read_start.strftime("%Y-%m-%d") if read_start is not None else None
         download_end = end_date
 
-        # 筛选需要网络下载的股票（含基准）
-        all_symbols = list(self.symbols)
+        # 需要下载的真实标的（含基准）；模拟标的全在内存生成，永不下载
+        all_symbols = list(self._real_symbols)
         if self.benchmark and self.benchmark not in all_symbols:
             all_symbols.append(self.benchmark)
         need_download = [
@@ -373,16 +564,28 @@ class Data():
             if self._needs_download(s, download_start, download_end)
         ]
 
-        # 仅当有股票需要下载时才登录 baostock
+        # 模拟标的的日期轴：区间内的真实交易日（随指标预热一起向前扩展）
+        need_calendar = bool(self._sim_specs)
+        sim_start = sim_end = None
+        if need_calendar:
+            sim_start = (read_start.strftime("%Y-%m-%d")
+                         if read_start is not None else self.SIM_START)
+            sim_end = (pd.Timestamp(end_date) if end_date is not None
+                       else pd.Timestamp.now().floor('D')).strftime("%Y-%m-%d")
+
+        # 需要下载、或需要模拟交易日历时，登录 baostock
         bs_logged_in = False
-        if need_download and self.source == 'baostock':
+        if (need_download and self.source == 'baostock') or need_calendar:
             lg = bs.login()
             if lg.error_code != '0':
                 raise RuntimeError(f"baostock 登录失败: {lg.error_msg}")
             bs_logged_in = True
 
         errors = []
+        sim_index = None
         try:
+            if need_calendar:
+                sim_index = self._trading_index(sim_start, sim_end)
             if need_download:
                 if self.source == 'baostock':
                     for symbol in tqdm(need_download, desc="下载数据"):
@@ -422,11 +625,18 @@ class Data():
             # 懒加载模式：返回 dask DataFrame，列名 {symbol}|{factor}
             dfs = []
             for symbol in self.symbols:
-                parquet_path = self.target_dir / f"{symbol}.parquet"
-                if not parquet_path.exists():
-                    logger.warning(f"数据文件不存在，跳过: {parquet_path}")
-                    continue
-                ddf = dd.read_parquet(str(parquet_path), filters=pq_filters)
+                if symbol in self._sim_specs:
+                    # clear_divisions：真实缓存读出的 divisions 恒为未知（(None, None)），
+                    # 模拟帧若带已知 divisions，混合 concat 时 dask 会在 min/max 上炸
+                    ddf = dd.from_pandas(
+                        self._generate_symbol(symbol, sim_index), npartitions=1,
+                    ).clear_divisions()
+                else:
+                    parquet_path = self.target_dir / f"{symbol}.parquet"
+                    if not parquet_path.exists():
+                        logger.warning(f"数据文件不存在，跳过: {parquet_path}")
+                        continue
+                    ddf = dd.read_parquet(str(parquet_path), filters=pq_filters)
                 ddf['returns'] = ddf['close'].diff() / ddf['close'].shift(1)
                 ddf = self._apply_indicators(ddf)
                 column_mapping = {col: f'{symbol}|{col}' for col in ddf.columns}
@@ -457,11 +667,16 @@ class Data():
             # 全量模式（默认）
             dfs = []
             for symbol in self.symbols:
-                parquet_path = self.target_dir / f"{symbol}.parquet"
-                if not parquet_path.exists():
-                    logger.warning(f"数据文件不存在，跳过: {parquet_path}")
-                    continue
-                df = dd.read_parquet(str(parquet_path), filters=pq_filters)
+                if symbol in self._sim_specs:
+                    df = dd.from_pandas(
+                        self._generate_symbol(symbol, sim_index), npartitions=1,
+                    ).clear_divisions()
+                else:
+                    parquet_path = self.target_dir / f"{symbol}.parquet"
+                    if not parquet_path.exists():
+                        logger.warning(f"数据文件不存在，跳过: {parquet_path}")
+                        continue
+                    df = dd.read_parquet(str(parquet_path), filters=pq_filters)
                 df['returns'] = df['close'].diff() / df['close'].shift(1)
                 df = self._apply_indicators(df)
                 column_mapping = {col: f'{symbol}|{col}' for col in df.columns}
