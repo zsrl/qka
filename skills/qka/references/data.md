@@ -20,7 +20,7 @@ data = Data(
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `symbols` | `list[str]` | `None` | A 股代码，baostock 格式 `sz.000001`、`sh.600000` |
+| `symbols` | `list[str \| Simulate]` | `None` | 标的列表。元素可以是 A 股代码（baostock 格式 `sz.000001`、`sh.600000`），也可以是 `Simulate` 对象（模拟标的），两者可混排，见下方「模拟标的」 |
 | `period` | `str` | `'1d'` | 数据周期，当前仅支持 `'1d'` |
 | `adjust` | `str` | `'qfq'` | 复权方式：`'qfq'` 前复权，`'hfq'` 后复权，`'bfq'` 不复权 |
 | `benchmark` | `str` | `None` | 基准指数代码，如 `'sh.000300'`。下载后在 `get()` 结果中追加 `benchmark|returns` 列 |
@@ -45,6 +45,53 @@ data = Data(
 | 常驻列 | 公式 | 说明 |
 |------|------|------|
 | `returns` | `close.diff() / close.shift(1)` | 日收益率，始终存在，无需在 indicators 中声明 |
+
+### 模拟标的
+
+`symbols` 的元素除了真实代码字符串，还可以是 `Simulate` 对象——一只由 qka **现场生成**的行情，不下载、不读缓存。写法与真实标的完全同构：
+
+```python
+from qka import Data, Simulate
+
+data = Data(symbols=[
+    'sh.600900',                                          # 真实标的，照常下载
+    Simulate('sim.a', drift=0.0, reversion=0.08, vol=0.018),   # 模拟标的
+])
+df = data.get(start_date='2023-01-01', end_date='2025-12-31')
+```
+
+`Simulate(symbol, drift=0.0, reversion=0.0, vol=0.012)` 的构造参数：
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `symbol` | `str` | 必填 | 标的代码，自定义即可（如 `'sim.a'`）。同时用作列前缀 `sim.a|close`；不能为空，也不能与同一 `Data` 内其他标的重复 |
+| `drift` | `float` | `0.0` | 日漂移 μ。正=上涨、负=下跌、0=无方向 |
+| `reversion` | `float` | `0.0` | 均值回复强度 θ，必须 `>= 0`。越大越黏在中枢附近（半衰期 = `ln2/θ`）；`0` = 不回复 |
+| `vol` | `float` | `0.012` | 日波动率 σ，必须 `> 0`。如 `0.015` 约等于每日上下 1.5% |
+
+行情按「带趋势的均值回复」在对数价格上演化：
+
+```
+r_t = drift + reversion * (logAnchor - logP_{t-1}) + vol * eps_t        eps_t ~ N(0, 1)
+```
+
+`drift=0` 且 `reversion=0` 时退化为纯随机游走。常见组合：
+
+| 想要的行情 | 写法 |
+|------|------|
+| 单边上涨 | `Simulate('sim.up', drift=0.002)` |
+| 单边下跌 | `Simulate('sim.dn', drift=-0.003)` |
+| 来回震荡 | `Simulate('sim.side', reversion=0.08, vol=0.018)` |
+| 纯随机 | `Simulate('sim.rand')` |
+
+与真实标的的异同：
+
+- **日期轴**：取 `get(start_date, end_date)` 区间内的**真实交易日**（来自 baostock 交易日历，一日一根）。因此模拟数据同样需要能登录 baostock，且 `start_date=None` 时从 `Data.SIM_START`（`'2020-01-02'`）起算
+- **指标预热**：与真实源一致——有 `indicators` / `warmup` 时日期轴会自动向前扩展，返回结果仍严格限定在 `[start_date, end_date]`
+- **`indicators` / `extra_fields` / `warmup`**：全部照常生效，列名与真实源同样是 `{symbol}|{field}`，扩展列同样是「不请求就不生成」
+- **`benchmark`**：与标的是真是模拟无关——`Backtest.run(benchmark=...)` 照常生效，基准始终走真实数据源单独加载
+- **每次不同**：没有随机种子参数，每次调用都是新一批行情（不可复现）
+- **不落盘**：模拟标的不写缓存；`symbols` 里若全是模拟标的，连 `datadir` 都不会创建
 
 ### extra_fields 扩展字段
 

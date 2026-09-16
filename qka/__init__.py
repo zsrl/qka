@@ -12,6 +12,7 @@ except PackageNotFoundError:
     __version__ = "0.1.0"  # fallback version
 
 # 核心功能直接导入
+from qka.core.simulate import Simulate
 from qka.core.data import Data
 from qka.core.accessor import DataAccessor
 from qka.core.backtest import Backtest
@@ -25,7 +26,7 @@ from qka import core, utils
 
 __all__ = [
     # 核心功能
-    'Data', 'Backtest', 'Strategy', 'Broker', 'DataAccessor', 'SizingAccessor',
+    'Data', 'Simulate', 'Backtest', 'Strategy', 'Broker', 'DataAccessor', 'SizingAccessor',
     # 分析
     'Analysis', 'Segment', 'AlphaBeta',
     # 子模块

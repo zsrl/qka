@@ -5,11 +5,12 @@ description: 使用 QKA（快量化）框架生成 A 股量化回测策略、选
 
 # QKA 框架
 
-简洁易用的 A 股量化回测框架，共六个公开类：
+简洁易用的 A 股量化回测框架，共七个公开类：
 
 | 类 | 全限定名 | 作用 |
 |-----|------|------|
 | Data | `qka.Data` | 行情数据加载 + 指标预计算 |
+| Simulate | `qka.Simulate` | 模拟标的 — 描述一只由 qka 现场生成的行情 |
 | Strategy | `qka.Strategy` | 策略基类 — 实现 `on_bar` 做交易决策 |
 | Broker | `qka.Broker` | 虚拟券商 — 执行买卖，管理资金和持仓 |
 | SizingAccessor | `qka.SizingAccessor` | 仓位计算 — 四种仓位方法 |
@@ -23,6 +24,7 @@ description: 使用 QKA（快量化）框架生成 A 股量化回测策略、选
 | 模块 | 文件 | 内容 |
 |------|------|------|
 | Data | `references/data.md` | 数据加载、指标预计算（ta 库全部指标 + qka 内置指标）、`get()` |
+| Simulate | `references/data.md` | 模拟标的：`Simulate(symbol, drift, reversion, vol)`，放进 `Data(symbols=[...])` |
 | Strategy | `references/strategy.md` | 策略基类、`on_bar`、`self.get()`、`self.history()` |
 | Backtest | `references/backtest.md` | `run()`、`bt.metrics`、`bt.results`、`bt.trade_history` |
 | Broker | `references/broker.md` | `buy()`、`sell()` |
