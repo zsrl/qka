@@ -49,14 +49,14 @@ sma5  = self.get('sma_5')   # indicators 中定义的指标列
 | 属性 | 说明 |
 |------|------|
 | 返回类型 | `pd.Series` |
-| index | 股票代码，如 `'sz.000001'`、`'sh.600000'` |
+| index | 股票代码，如 `'000001.SZ'`、`'600000.SH'` |
 | values | 当前 bar 的最新值，`float` |
 | 空值 | 无数据时返回空 `pd.Series`，不是 `None` |
 
 ```python
 # 安全访问
-if 'sz.000001' in close.index:
-    price = float(close['sz.000001'])
+if '000001.SZ' in close.index:
+    price = float(close['000001.SZ'])
 ```
 
 ### self.history()

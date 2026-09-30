@@ -16,7 +16,7 @@
 买入，`size` 必须是 100 的整数倍（A 股 1 手 = 100 股）。
 
 ```python
-success = self.broker.buy('sz.000001', float(close['sz.000001']), 100)
+success = self.broker.buy('000001.SZ', float(close['000001.SZ']), 100)
 ```
 
 - 实际成交价 = `price * (1 + slippage)`（默认滑点 0.1%）
@@ -31,7 +31,7 @@ success = self.broker.buy('sz.000001', float(close['sz.000001']), 100)
 卖出，`size` 必须是 100 的整数倍。
 
 ```python
-success = self.broker.sell('sz.000001', float(close['sz.000001']), 100)
+success = self.broker.sell('000001.SZ', float(close['000001.SZ']), 100)
 ```
 
 - 自动扣佣金 + 印花税（万 5，仅卖出）

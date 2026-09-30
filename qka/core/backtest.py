@@ -188,7 +188,7 @@ class Backtest:
         """
         try:
             from qka.core.data import Data
-            bm_data = Data(symbols=[benchmark_code], source='baostock')
+            bm_data = Data(symbols=[benchmark_code])
             bm_df = bm_data.get(lazy=False)
             if bm_df is not None and not bm_df.empty:
                 # 提取 close 列（可能是多股票 MultiIndex，取第一只）
