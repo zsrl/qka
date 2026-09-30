@@ -38,17 +38,22 @@ class Data():
     通过 `indicators` 参数统一处理技术指标和自定义因子，在数据加载时一次性预计算。
     
     Attributes:
-        symbols (List[str]): 股票代码列表，baostock 格式如 sz.000001、sh.600000
+        symbols (List[str]): 股票代码列表，格式「代码.市场」，如 ['600519.SH', '000001.SZ']
+            （也兼容 sh.600519 旧写法，两种写法等价）
         period (str): 数据周期，如 '1d'、'1m' 等
         adjust (str): 复权方式，如 'qfq'、'hfq'、'bfq'
         indicators (dict | Callable): 预计算指标/因子
-        source (str): 数据源，默认 'baostock'
+        source (str): 数据源，默认 'tickflow'（可选 'baostock'）
         pool_size (int): 并发下载线程数
         datadir (Path): 数据缓存目录
         target_dir (Path): 目标存储目录
-        extra_fields (List[str]): baostock 扩展字段（选股/估值用），如 ['peTTM', 'pbMRQ', 'turn']
+        extra_fields (List[str]): 扩展字段（选股/估值用），如 ['peTTM', 'pbMRQ', 'turn']。
+            仅 'baostock' 源提供（可选值见 BAOSTOCK_EXTRA_FIELDS）；'tickflow' 源无扩展列，会忽略
     """
     
+    # 支持的行情源
+    SOURCES = ('tickflow', 'baostock')
+
     # baostock query_history_k_data_plus 完整支持的基础字段（除 date 索引外）
     BAOSTOCK_BASE_FIELDS = ["open", "high", "low", "close", "volume", "amount"]
     # 可通过 extra_fields 追加的扩展字段白名单（行情/估值/选股类）
@@ -63,6 +68,9 @@ class Data():
         "psTTM",       # 市销率(TTM)
         "pcfNcfTTM",   # 市现率(TTM)
     ]
+    # TickFlow 可提供的扩展字段：其历史日线固定返回 OHLCV + amount，
+    # 无估值/换手率等扩展列（季报级 financials 不是每日序列，不接入）。
+    TICKFLOW_EXTRA_FIELDS = []
 
     # ── 模拟数据源默认值 ──
     SIM_START = '2020-01-02'    # 模拟行情默认起点（调用方未给 start_date 时使用）
@@ -87,7 +95,7 @@ class Data():
         benchmark: Optional[str] = None,
         period: str = '1d',
         adjust: str = 'qfq',
-        source: str = 'baostock',
+        source: str = 'tickflow',
         pool_size: int = 10,
         datadir: Optional[Path] = None,
         indicators: Optional[dict] = None,
@@ -99,13 +107,14 @@ class Data():
 
         Args:
             symbols: 标的列表，元素**可以是真实代码字符串，也可以是 Simulate 对象**。
-                真实代码用 baostock 格式，如 ['sz.000001', 'sh.600000']；Simulate 对象
+                真实代码用「代码.市场」格式，如 ['600519.SH', '000001.SZ']（同样兼容
+                sh.600519 旧写法）；Simulate 对象
                 表示一只由 qka 现场生成的模拟标的，两者可以混排。写法完全同构，区别只在
                 元素本身：
 
                 ```python
                 Data(symbols=[
-                    'sh.600900',
+                    '600900.SH',
                     Simulate('sim.a', drift=0.0, reversion=0.08, vol=0.018),
                 ])
                 ```
@@ -114,18 +123,20 @@ class Data():
                 一致（列名同样是 {symbol}|{field}，扩展列同样是「不请求就不生成」）。
                 模拟标的的行情区间由 get(start_date, end_date) 决定 —— 用 baostock 的
                 交易日历把区间内的真实交易日取出来，一 日一根，与真实源同构。
-            benchmark: 基准代码，如 'sh.000300'。基准数据以 benchmark| 前缀加入最终 DataFrame，
+            benchmark: 基准代码，如 '000300.SH'。基准数据以 benchmark| 前缀加入最终 DataFrame，
                        仅供辅助计算（β/α 等），不参与指标计算
             period: 数据周期，如 '1d'（日线）、'1m'（分钟）
             adjust: 复权方式，'qfq'（前复权）、'hfq'（后复权）、'bfq'（不复权）
-            source: 数据来源，默认 'baostock'
+            source: 数据来源，默认 'tickflow'（可选 'baostock'）。两者返回结构一致，
+                切换源不影响上层调用；差异见各源的扩展字段能力
             pool_size: 并发下载线程数
             datadir: 缓存目录路径
             indicators: 预计算指标/因子，支持三种格式：
-            extra_fields: baostock 扩展字段列表（选股/估值用，如 ['peTTM', 'pbMRQ', 'turn']），
-                可选值见 BAOSTOCK_EXTRA_FIELDS。追加的列同样遵循 {symbol}|{field} 命名，
-                如 'sh.600000|peTTM'。注意：首次下载后缓存字段固定，变更 extra_fields
-                会自动检测列缺失并重新下载对应股票。
+            extra_fields: 扩展字段列表（选股/估值用，如 ['peTTM', 'pbMRQ', 'turn']），
+                可选值见 BAOSTOCK_EXTRA_FIELDS —— 仅 'baostock' 源提供；
+                'tickflow' 源无扩展列，传入的扩展字段会被静默忽略（不报错、不生成该列）。
+                追加的列同样遵循 {symbol}|{field} 命名，如 '600519.SH|peTTM'。注意：
+                首次下载后缓存字段固定，变更 extra_fields 会自动检测列缺失并重新下载对应股票。
 
             warmup: 指标预热天数（默认 0）。回测/取数时自动多读取 warmup 个交易日的历史数据
                 用于计算指标，使第 1 个交易日即可拿到有效指标值，无需在策略里手写
@@ -174,18 +185,31 @@ class Data():
         self.benchmark = benchmark
         self.period = period
         self.adjust = adjust
+        if source not in self.SOURCES:
+            raise ValueError(f"不支持的数据源: {source!r}。可选: {self.SOURCES}")
         self.source = source
         self.pool_size = pool_size
         self.warmup = warmup
 
-        # extra_fields 白名单校验 + 去重
-        self.extra_fields = []
+        # 当前数据源实际支持的扩展字段（源能力不同，按源过滤）
+        whitelist = (self.BAOSTOCK_EXTRA_FIELDS if source == 'baostock'
+                     else self.TICKFLOW_EXTRA_FIELDS)
+
+        # extra_fields 校验 + 去重
+        # 未知字段（拼写错误）报错；当前源提供不了的字段静默忽略
+        # （如 tickflow 无估值列，调用方仍传 peTTM 时不报错、只是不生成该列）
+        self.extra_fields = []              # 当前源实际会下载的扩展字段
+        self._requested_extra_fields = []   # 调用方原始请求（不按源过滤，模拟标的按此生成）
         for f in (extra_fields or []):
             if f not in self.BAOSTOCK_EXTRA_FIELDS:
                 raise ValueError(
                     f"extra_fields 含不支持的字段: {f}。"
                     f"可选: {self.BAOSTOCK_EXTRA_FIELDS}"
                 )
+            if f not in self._requested_extra_fields:
+                self._requested_extra_fields.append(f)
+            if f not in whitelist:
+                continue
             if f not in self.extra_fields:
                 self.extra_fields.append(f)
 
@@ -299,8 +323,10 @@ class Data():
         }, index=idx)
 
         # 4. 扩展列：只生成请求的字段（与真实源「不给就没有」一致）
+        # 用「调用方原始请求」而非 self.extra_fields —— 模拟数据由 qka 现场生成，
+        # 不依赖任何外部源，故不受数据源的扩展字段能力限制
         log_ratio = np.log(close / close[0])
-        for field in self.extra_fields:
+        for field in self._requested_extra_fields:
             if field == 'preclose':
                 df[field] = preclose
             elif field == 'pctChg':
@@ -374,7 +400,9 @@ class Data():
             existing = set(pq.read_schema(path).names)
         except Exception:
             return merged
-        for f in self.BAOSTOCK_EXTRA_FIELDS:
+        whitelist = (self.BAOSTOCK_EXTRA_FIELDS if self.source == 'baostock'
+                     else self.TICKFLOW_EXTRA_FIELDS)
+        for f in whitelist:
             if f in existing and f not in merged:
                 merged.append(f)
         return merged
@@ -411,22 +439,19 @@ class Data():
 
         # ── 首次下载：只拉请求范围（缓存缺失 extra_fields 列时也全量重下）──
         if not path.exists() or self._cache_missing_extra_fields(path):
-            df = self._get_from_baostock(
+            df = self._fetch(
                 symbol,
                 start_date=download_start or default_start,
                 end_date=download_end or default_end,
                 extra_fields=merged_extra,
             )
             if len(df) == 0:
-                raise RuntimeError(f"{symbol}: baostock 返回空数据")
+                raise RuntimeError(f"{symbol}: 数据源（{self.source}）返回空数据")
             table = pa.Table.from_pandas(df)
             pq.write_table(table, path)
             return path
 
         # ── 增量更新：检查缓存覆盖，补缺失范围 ──
-        if self.source != 'baostock':
-            return path
-
         existing = pd.read_parquet(path)
         if not isinstance(existing.index, pd.DatetimeIndex):
             return path
@@ -440,7 +465,7 @@ class Data():
         req_start = pd.Timestamp(download_start) if download_start else None
         if req_start is not None and req_start < cache_min:
             end_before = (cache_min - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-            df_before = self._get_from_baostock(
+            df_before = self._fetch(
                 symbol, start_date=download_start, end_date=end_before,
                 extra_fields=merged_extra,
             )
@@ -449,10 +474,14 @@ class Data():
                 changed = True
 
         # 往后补
-        req_end = pd.Timestamp(download_end) if download_end else pd.Timestamp.now()
+        # 口径与 _needs_download 保持一致：按「日」比较。若用带时刻的 now()，
+        # 缓存末日恰为今天时 now() > cache_max 恒成立，会去补 [明天, 今天] 这一段，
+        # 起始日期大于终止日期 ⇒ baostock 直接报错。
+        req_end = (pd.Timestamp(download_end) if download_end
+                   else pd.Timestamp.now().floor('D'))
         if req_end > cache_max:
             start_after = (cache_max + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-            df_after = self._get_from_baostock(
+            df_after = self._fetch(
                 symbol,
                 start_date=start_after,
                 end_date=download_end or default_end,
@@ -483,8 +512,6 @@ class Data():
         path = self.target_dir / f"{symbol}.parquet"
         if not path.exists() or self._cache_missing_extra_fields(path):
             return True
-        if self.source != 'baostock':
-            return False
         existing = pd.read_parquet(path)
         if not isinstance(existing.index, pd.DatetimeIndex):
             return False
@@ -920,7 +947,7 @@ class Data():
         从 baostock 获取单个股票的数据。
 
         Args:
-            symbol: baostock 格式股票代码，如 sz.000001、sh.600000
+            symbol: 标的代码，任意写法（600519.SH 或 sh.600519），内部统一转换
             start_date: 起始日期，格式 YYYY-MM-DD，默认 1990-01-01
             end_date: 截止日期，格式 YYYY-MM-DD，默认 2050-12-31
             extra_fields: 本次请求的扩展字段列表。None 时使用 self.extra_fields；
@@ -938,8 +965,11 @@ class Data():
         extra = list(extra_fields) if extra_fields is not None else self.extra_fields
         fields = ",".join(["date"] + self.BAOSTOCK_BASE_FIELDS + extra)
 
+        # baostock 只认 sh.600519 写法 ⇒ 无论调用方用哪种写法都统一转换
+        bs_symbol = self.to_baostock_symbol(symbol)
+
         rs = bs.query_history_k_data_plus(
-            symbol,
+            bs_symbol,
             fields,
             start_date=start_date,
             end_date=end_date,
@@ -947,7 +977,7 @@ class Data():
             adjustflag=adjustflag,
         )
         if rs.error_code != '0':
-            raise RuntimeError(f"baostock 查询 {symbol}({bs_code}) 失败: {rs.error_msg}")
+            raise RuntimeError(f"baostock 查询 {symbol}({bs_symbol}) 失败: {rs.error_msg}")
         # 官网标准写法：get_row_data() 逐行取 + next() 翻页，避免 get_data() 的 df.append()
         data_list = []
         while (rs.error_code == '0') & rs.next():
@@ -965,4 +995,136 @@ class Data():
 
         df["date"] = pd.to_datetime(df["date"])
         df = df.set_index("date")
+        return df
+
+    # ── 取数分发 ────────────────────────────────────────────────
+
+    def _fetch(
+        self, symbol: str,
+        start_date: str = '1990-01-01',
+        end_date: str = '2050-12-31',
+        extra_fields: Optional[List[str]] = None,
+    ) -> pd.DataFrame:
+        """按当前数据源分发到对应实现，返回结构一致（date 索引 + OHLCV/amount）。"""
+        if self.source == 'baostock':
+            return self._get_from_baostock(symbol, start_date, end_date, extra_fields)
+        return self._get_from_tickflow(symbol, start_date, end_date, extra_fields)
+
+    # ── TickFlow 数据源 ────────────────────────────────────────
+
+    _tf_client = None   # 进程级复用，避免重复初始化
+
+    @classmethod
+    def _tickflow_client(cls):
+        """惰性创建并复用 TickFlow 客户端（当前走免费服务，无需 api_key）。"""
+        if cls._tf_client is None:
+            from tickflow import TickFlow
+            cls._tf_client = TickFlow.free()
+        return cls._tf_client
+
+    @staticmethod
+    def _split_symbol(symbol: str):
+        """
+        拆出 (小写市场, 代码)。两种写法等价、都支持：
+
+            600519.SH   （推荐，数字在前）
+            sh.600519   （旧写法，兼容保留）
+
+        Returns:
+            (market, code)，如 ('sh', '600519')
+        """
+        if '.' not in symbol:
+            raise ValueError(
+                f"标的代码缺少市场标识: {symbol!r}（应形如 600519.SH 或 sh.600519）"
+            )
+        head, tail = symbol.split('.', 1)
+        # 市场标识是两位字母（sh/sz/bj/hk/us），据此判断它在前还是在后
+        if len(head) == 2 and head.isalpha():
+            market, code = head, tail        # sh.600519
+        else:
+            code, market = head, tail        # 600519.SH
+        return market.lower(), code
+
+    @classmethod
+    def to_baostock_symbol(cls, symbol: str) -> str:
+        """任意写法 → baostock 写法，如 sh.600519"""
+        market, code = cls._split_symbol(symbol)
+        return f"{market}.{code}"
+
+    @classmethod
+    def to_tickflow_symbol(cls, symbol: str) -> str:
+        """任意写法 → tickflow 写法，如 600519.SH"""
+        market, code = cls._split_symbol(symbol)
+        return f"{code}.{market.upper()}"
+
+    def _get_from_tickflow(
+        self, symbol: str,
+        start_date: str = '1990-01-01',
+        end_date: str = '2050-12-31',
+        extra_fields: Optional[List[str]] = None,
+    ) -> pd.DataFrame:
+        """
+        从 TickFlow 获取单只标的的日线数据。
+
+        返回结构与 _get_from_baostock 一致（date 索引 + open/high/low/close/
+        volume/amount），但有两处口径必须转换：
+        - **volume**：TickFlow 单位为「手」，×100 换算成 baostock 口径的「股」
+        - **timestamp**：TickFlow 给的是「北京时间当天零点」对应的 UTC 毫秒，
+          需 +8 小时还原为北京日期，否则日期整体偏一天
+
+        extra_fields 对 TickFlow 无意义（其历史日线不含扩展列），此处不处理。
+        """
+        # 周期映射（当前仅日/周/月线；分钟线 TickFlow 属付费能力，未接）
+        period_map = {'1d': '1d', '1w': '1w', '1M': '1M'}
+        if self.period not in period_map:
+            raise RuntimeError(
+                f"tickflow 源暂不支持周期 {self.period!r}（可选: {list(period_map)}）"
+            )
+        period = period_map[self.period]
+
+        # 复权映射：tickflow forward=前复权 / backward=后复权 / none=不复权
+        adjust_map = {'bfq': 'none', 'qfq': 'forward', 'hfq': 'backward'}
+        adjust = adjust_map.get(self.adjust, 'forward')
+
+        tf_symbol = self.to_tickflow_symbol(symbol)
+
+        # 日期 → 毫秒时间戳（右端 +1 天，保证 end_date 当天落在闭区间内）
+        start_ms = int(pd.Timestamp(start_date).timestamp() * 1000)
+        end_ms = int((pd.Timestamp(end_date) + pd.Timedelta(days=1)).timestamp() * 1000)
+
+        client = self._tickflow_client()
+        try:
+            data = client.klines.get(
+                tf_symbol,
+                period=period,
+                # count 必须显式给足：TickFlow 默认只返回最近 100 条，
+                # 不给会静默截断长区间（全历史会只剩最近 100 个交易日）
+                count=10000,
+                start_time=start_ms,
+                end_time=end_ms,
+                adjust=adjust,
+            )
+        except Exception as e:
+            raise RuntimeError(f"tickflow 查询 {symbol}({tf_symbol}) 失败: {e}")
+
+        ts = (data or {}).get('timestamp')
+        if not ts:
+            return pd.DataFrame()
+
+        # UTC 毫秒 → 北京日期（当天零点）
+        idx = (pd.to_datetime(pd.Series(ts), unit='ms')
+               + pd.Timedelta(hours=8)).dt.normalize()
+        idx.name = 'date'
+
+        df = pd.DataFrame({
+            'open': data['open'],
+            'high': data['high'],
+            'low': data['low'],
+            'close': data['close'],
+            'volume': [v * 100 for v in data['volume']],   # 手 → 股
+            'amount': data['amount'],
+        }, index=idx)
+
+        for col in self.BAOSTOCK_BASE_FIELDS:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
         return df

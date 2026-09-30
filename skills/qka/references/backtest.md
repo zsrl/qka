@@ -28,7 +28,7 @@ bt = Backtest(data, strategy)
 | `cash` | `100000.0` | 初始资金 |
 | `start_date` | `None` | 回测起始日期 `'YYYY-MM-DD'` |
 | `end_date` | `None` | 回测截止日期 |
-| `benchmark` | `None` | 基准指数代码，baostock 格式如 `'sh.000300'` |
+| `benchmark` | `None` | 基准指数代码，如 `'000300.SH'` |
 
 > 500 bar 以上自动分块迭代，避免一次性加载全量数据。
 
@@ -122,7 +122,7 @@ bt.results.iloc[-1]     # 最终状态
 from qka import Data, Strategy, Backtest
 
 data = Data(
-    symbols=['sz.000001'],
+    symbols=['000001.SZ'],
     indicators={
         'sma_5':  ('ta.trend.sma_indicator', 'close', 5),
         'sma_20': ('ta.trend.sma_indicator', 'close', 20),

@@ -10,7 +10,7 @@
 from qka import Data
 
 data = Data(
-    symbols=['sz.000001', 'sh.600000'],
+    symbols=['000001.SZ', '600000.SH'],
     period='1d',
     adjust='qfq',
     benchmark=None,
@@ -20,12 +20,13 @@ data = Data(
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `symbols` | `list[str \| Simulate]` | `None` | 标的列表。元素可以是 A 股代码（baostock 格式 `sz.000001`、`sh.600000`），也可以是 `Simulate` 对象（模拟标的），两者可混排，见下方「模拟标的」 |
+| `symbols` | `list[str \| Simulate]` | `None` | 标的列表。元素可以是 A 股代码（**`代码.市场`**，如 `'000001.SZ'`、`'600000.SH'`；也兼容 `sz.000001` 旧写法），也可以是 `Simulate` 对象（模拟标的），两者可混排，见下方「模拟标的」 |
 | `period` | `str` | `'1d'` | 数据周期，当前仅支持 `'1d'` |
 | `adjust` | `str` | `'qfq'` | 复权方式：`'qfq'` 前复权，`'hfq'` 后复权，`'bfq'` 不复权 |
-| `benchmark` | `str` | `None` | 基准指数代码，如 `'sh.000300'`。下载后在 `get()` 结果中追加 `benchmark|returns` 列 |
+| `source` | `str` | `'tickflow'` | 数据源。`'tickflow'`（默认）行情覆盖全，**含 ETF / 可转债全历史**；`'baostock'` 提供估值等扩展字段（见 `extra_fields`） |
+| `benchmark` | `str` | `None` | 基准指数代码，如 `'000300.SH'`。下载后在 `get()` 结果中追加 `benchmark|returns` 列 |
 | `indicators` | `dict` | `None` | 预计算指标，见下方 |
-| `extra_fields` | `list[str]` | `None` | baostock 扩展字段（选股/估值用），见下方 |
+| `extra_fields` | `list[str]` | `None` | 扩展字段（选股/估值用）。**仅 `source='baostock'` 提供**；`tickflow` 源无这些列，传入会被静默忽略，见下方 |
 | `warmup` | `int` | `0` | 指标预热天数。回测/取数时自动多读 `warmup` 个交易日历史用于计算指标，使第 1 个交易日即拿到有效指标值（无需手写跳过前 N 根 bar）。仅用于计算，不增加回测 bar 数 |
 
 > **warmup（指标预热）**：若指标/因子需要较长历史窗口（如动量排名需看前 200 天），设 `warmup=200`。
@@ -34,7 +35,7 @@ data = Data(
 >
 > ```python
 > data = Data(
->     symbols=['sz.000001'],
+>     symbols=['000001.SZ'],
 >     indicators={'mom200': lambda df: df['close'].pct_change(200)},
 >     warmup=200,   # 自定义指标 qka 推断不出窗口，显式声明预热天数
 > )
@@ -54,7 +55,7 @@ data = Data(
 from qka import Data, Simulate
 
 data = Data(symbols=[
-    'sh.600900',                                          # 真实标的，照常下载
+    '600900.SH',                                          # 真实标的，照常下载
     Simulate('sim.a', drift=0.0, reversion=0.08, vol=0.018),   # 模拟标的
 ])
 df = data.get(start_date='2023-01-01', end_date='2025-12-31')
@@ -95,7 +96,9 @@ r_t = drift + reversion * (logAnchor - logP_{t-1}) + vol * eps_t        eps_t ~ 
 
 ### extra_fields 扩展字段
 
-`extra_fields` 追加 baostock `query_history_k_data_plus` 接口支持的扩展列（选股/估值用），列名同样遵循 `{symbol}|{field}` 约定（如 `sz.000001|peTTM`），数值自动转为 `float64`。**不是指标，不参与 indicators 预计算**，是随行情一起下载的原始字段。
+`extra_fields` 追加扩展列（选股/估值用），列名同样遵循 `{symbol}|{field}` 约定（如 `000001.SZ|peTTM`），数值自动转为 `float64`。**不是指标，不参与 indicators 预计算**，是随行情一起下载的原始字段。
+
+> ⚠️ **仅 `source='baostock'` 提供**：这些扩展列来自 baostock 的 `query_history_k_data_plus` 接口。默认源 `'tickflow'` 的历史日线固定只有 OHLCV + 成交额，**没有**这些扩展列——此时传入的 `extra_fields` 会被静默忽略（不报错、也不生成对应列）。需要估值/换手率等字段时，显式用 `Data(..., source='baostock')`。
 
 **不传 `extra_fields` 时，每只股票默认只有 6 个行情列 + 1 个常驻列：**
 
@@ -113,11 +116,11 @@ r_t = drift + reversion * (logAnchor - logP_{t-1}) + vol * eps_t        eps_t ~ 
 
 ```python
 data = Data(
-    symbols=['sz.000001'],
+    symbols=['000001.SZ'],
     extra_fields=['peTTM', 'pbMRQ', 'turn'],   # 选股常用：估值 + 换手率
 )
 df = data.get(start_date='2024-01-02', end_date='2024-01-05')
-df['sz.000001|peTTM']   # 市盈率(TTM)，float64
+df['000001.SZ|peTTM']   # 市盈率(TTM)，float64
 ```
 
 可用的扩展字段（白名单，传其他字段会抛 `ValueError`）：
@@ -153,7 +156,7 @@ df['sz.000001|peTTM']   # 市盈率(TTM)，float64
 
 ```python
 data = Data(
-    symbols=['sz.000001'],
+    symbols=['000001.SZ'],
     indicators={
         'sma_5':       ('ta.trend.sma_indicator', 'close', 5),
         'sma_20':      ('ta.trend.sma_indicator', 'close', 20),
@@ -277,8 +280,8 @@ qka 框架内置的滚动窗口指标，格式为 `{'列名': ('qka.函数名', 
 
 ```python
 data = Data(
-    symbols=['sz.000001', 'sh.600000'],
-    benchmark='sh.000300',  # alpha/beta/information_ratio 必需
+    symbols=['000001.SZ', '600000.SH'],
+    benchmark='000300.SH',  # alpha/beta/information_ratio 必需
     indicators={
         'sma_20':   ('ta.trend.sma_indicator', 'close', 20),
         'beta_60':  ('qka.beta', 60),
@@ -326,9 +329,9 @@ df = data.get(start_date='2024-01-01', end_date='2024-12-31')
 |------|------|
 | 类型 | `pd.DataFrame`（`lazy=True` 时返回 `dask.DataFrame`） |
 | 索引 | 日期索引，**索引名为 `"date"`**。`reset_index()` 后日期列名也是 `"date"` |
-| 列名 | `{symbol}|{factor}` — 例如 `sz.000001|close`、`sz.000001|sma_5`、`sh.600000|volume` |
+| 列名 | `{symbol}|{factor}` — 例如 `000001.SZ|close`、`000001.SZ|sma_5`、`600000.SH|volume` |
 | 常驻列 | 除 `open/high/low/close/volume/amount` 外，自动内置 `{symbol}|returns` |
-| 扩展列 | 构造时设了 `extra_fields` 时，追加 `{symbol}|{field}` 原始字段列（如 `sz.000001|peTTM`），见上方 extra_fields 小节 |
+| 扩展列 | 构造时设了 `extra_fields` 时，追加 `{symbol}|{field}` 原始字段列（如 `000001.SZ|peTTM`），见上方 extra_fields 小节 |
 | 基准列 | 若构造时设了 `benchmark`，追加 `benchmark|returns`（无 `{symbol}|` 前缀） |
 | 列值 | 全部为 `float64`，指标列的早期行可能含 `NaN` |
 | 异常 | 无数据时抛出 `RuntimeError` |
@@ -336,7 +339,7 @@ df = data.get(start_date='2024-01-01', end_date='2024-12-31')
 **返回的宽表示例：**
 
 ```python
-data = Data(symbols=['sz.000001', 'sh.600000'], indicators={
+data = Data(symbols=['000001.SZ', '600000.SH'], indicators={
     'sma_5': ('ta.trend.sma_indicator', 'close', 5),
 })
 df = data.get(start_date='2024-01-02', end_date='2024-01-05')
@@ -345,7 +348,7 @@ df = data.get(start_date='2024-01-02', end_date='2024-01-05')
 返回的 DataFrame 结构（行=日期，列=每只股票的完整字段堆叠）：
 
 ```
-            sz.000001|open  sz.000001|close  ...  sz.000001|sma_5  sh.600000|open  sh.600000|close  ...  sh.600000|sma_5
+            000001.SZ|open  000001.SZ|close  ...  000001.SZ|sma_5  600000.SH|open  600000.SH|close  ...  600000.SH|sma_5
 2024-01-02           10.0             10.2  ...            NaN            15.0             15.3  ...            NaN
 2024-01-03           10.1             10.5  ...            NaN            15.2             15.6  ...            NaN
 2024-01-04           10.3             10.8  ...            NaN            14.9             15.1  ...            NaN
@@ -355,13 +358,13 @@ df = data.get(start_date='2024-01-02', end_date='2024-01-05')
 - 每只股票独占一组列，列前缀 = symbol
 - `returns` 列自动存在，无需在 indicators 中声明
 - 前 4 行 SMA 为 NaN（窗口=5，不足）
-- 若设了 `benchmark='sh.000300'`，末尾多一列 `benchmark|returns`
+- 若设了 `benchmark='000300.SH'`，末尾多一列 `benchmark|returns`
 
 ```python
 # 列名格式：{symbol}|{factor}
-df.columns  # ['sz.000001|open', 'sz.000001|close', 'sz.000001|returns',
-            #  'sz.000001|sma_5', 'sh.600000|open', 'sh.600000|close',
-            #  'sh.600000|returns', 'sh.600000|sma_5']
+df.columns  # ['000001.SZ|open', '000001.SZ|close', '000001.SZ|returns',
+            #  '000001.SZ|sma_5', '600000.SH|open', '600000.SH|close',
+            #  '600000.SH|returns', '600000.SH|sma_5']
 
 # 索引名为 "date"，reset_index 后转为 pd.Timestamp 列
 df = df.reset_index()

@@ -31,11 +31,11 @@ class Analysis:
 
     Example:
         >>> from qka import Data, Analysis
-        >>> data = Data(symbols=['sh.000300'])
+        >>> data = Data(symbols=['000300.SH'])
         >>> df = data.get()
         >>> analysis = Analysis()
-        >>> segs = analysis.zigzag(df['sh.000300|close'], threshold=0.3, min_days=90)
-        >>> ab = analysis.alpha_beta(df['sh.000300|returns'].dropna(),
+        >>> segs = analysis.zigzag(df['000300.SH|close'], threshold=0.3, min_days=90)
+        >>> ab = analysis.alpha_beta(df['000300.SH|returns'].dropna(),
         ...                           df['benchmark|returns'].dropna())
     """
 

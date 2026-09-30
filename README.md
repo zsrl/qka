@@ -45,7 +45,7 @@ npx skills add zsrl/qka
 from qka import Data
 
 data = Data(
-    symbols=['sz.000001', 'sh.600000'],
+    symbols=['000001.SZ', '600000.SH'],
     indicators={
         'sma_5':  ('ta.trend.sma_indicator', 'close', 5),
         'rsi_14': ('ta.momentum.rsi', 'close', 14),
@@ -78,7 +78,7 @@ from qka import Backtest
 
 strategy = MyStrategy()
 bt = Backtest(data, strategy)
-bt.run(cash=200000, start_date='2024-01-01', benchmark='sh.000300')
+bt.run(cash=200000, start_date='2024-01-01', benchmark='000300.SH')
 print(bt.metrics['total_return_pct'])   # 总收益率
 print(bt.metrics['sharpe_ratio'])        # 夏普比率
 ```
@@ -106,7 +106,7 @@ print(bt.metrics['sharpe_ratio'])        # 夏普比率
 from qka import Data, Strategy, Backtest
 
 data = Data(
-    symbols=['sz.000001'],
+    symbols=['000001.SZ'],
     indicators={
         'sma_5':  ('ta.trend.sma_indicator', 'close', 5),
         'sma_20': ('ta.trend.sma_indicator', 'close', 20),
@@ -147,7 +147,8 @@ print(bt.metrics['total_return_pct'])
 
 ## 致谢
 
-- [baostock](http://baostock.com) — 免费 A 股数据
+- [tickflow](https://tickflow.org) — 免费 A 股 / ETF / 可转债行情（默认数据源）
+- [baostock](http://baostock.com) — 免费 A 股数据（估值等扩展字段）
 - [ta](https://github.com/bukosabino/ta) — 技术指标库
 
 ---

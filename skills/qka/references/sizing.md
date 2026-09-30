@@ -10,8 +10,8 @@
 | `atr_risk(risk_ratio, price, atr_value, multiplier=2.0)` | ATR 风险仓位 |
 
 ```python
-price = float(close['sz.000001'])
+price = float(close['000001.SZ'])
 size = self.sizing.percent(0.1, price)  # 10% 仓位，已按手取整
 if size > 0:
-    self.broker.buy('sz.000001', price, size)
+    self.broker.buy('000001.SZ', price, size)
 ```

@@ -18,7 +18,7 @@ class Simulate:
     from qka import Data, Simulate
 
     data = Data(symbols=[
-        'sh.600900',                                       # 真实标的，照常下载
+        '600900.SH',                                       # 真实标的，照常下载
         Simulate('sim.a', drift=0.0, reversion=0.08, vol=0.018),
     ])
     df = data.get(start_date='2023-01-01', end_date='2025-12-31')

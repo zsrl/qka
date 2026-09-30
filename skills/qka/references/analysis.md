@@ -64,7 +64,7 @@ from qka import Analysis
 
 analysis = Analysis()
 result = analysis.alpha_beta(
-    df['sz.000001|returns'].dropna(),
+    df['000001.SZ|returns'].dropna(),
     df['benchmark|returns'].dropna(),
 )
 print(f'α={result.alpha:.2%}, β={result.beta:.2f}')
@@ -93,25 +93,25 @@ print(f'α={result.alpha:.2%}, β={result.beta:.2f}')
 ```python
 from qka import Data, Analysis
 
-data = Data(symbols=['sz.000001'], benchmark='sh.000300')
+data = Data(symbols=['000001.SZ'], benchmark='000300.SH')
 df = data.get()
 
 analysis = Analysis()
 
 # 趋势分段
-segs = analysis.zigzag(df['sz.000001|close'], threshold=0.3, min_days=90)
+segs = analysis.zigzag(df['000001.SZ|close'], threshold=0.3, min_days=90)
 for s in segs:
     print(f'{s.start.date()} ~ {s.end.date()}  {s.direction}  {s.change:+.1f}%')
 
 # 单次指标（标量，非滚动）
 ab = analysis.alpha_beta(
-    df['sz.000001|returns'].dropna(),
+    df['000001.SZ|returns'].dropna(),
     df['benchmark|returns'].dropna(),
 )
 print(f'α={ab.alpha:.2%}, β={ab.beta:.2f}')
 
-sharpe  = analysis.sharpe_ratio(df['sz.000001|returns'])
-mdd     = analysis.max_drawdown(df['sz.000001|returns'])
-ir      = analysis.information_ratio(df['sz.000001|returns'], df['benchmark|returns'])
+sharpe  = analysis.sharpe_ratio(df['000001.SZ|returns'])
+mdd     = analysis.max_drawdown(df['000001.SZ|returns'])
+ir      = analysis.information_ratio(df['000001.SZ|returns'], df['benchmark|returns'])
 print(f'夏普={sharpe:.2f}, 最大回撤={mdd:.1%}, IR={ir:.2f}')
 ```
