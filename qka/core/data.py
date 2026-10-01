@@ -4,6 +4,7 @@ QKA数据模块
 提供统一的数据获取、缓存和管理功能，支持多数据源、多周期、多因子的数据获取。
 """
 
+import os
 from pathlib import Path
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -29,6 +30,23 @@ def _is_qka_indicator(ind_type):
     """判断指标类型是否为 qka 内置指标（支持 qka. 前缀或裸名）。"""
     return (isinstance(ind_type, str) and
             (ind_type.startswith('qka.') or ind_type in _QKA_BUILTIN_NAMES))
+
+
+# 当日日线数据「可能已经生成」的时刻（本地时间）。一天以它为界切成前后两个时段：
+# 17:00 之前，数据源手里最新的一根还是上一交易日，当天这根根本还没生成；
+# 17:00 之后，当天的已经出完了，要补也就这一次。
+DATA_READY_HOUR = 17
+
+
+def _data_period(ts) -> tuple:
+    """把时刻归入「数据时段」——（日期，是否已过当日数据生成时刻）。
+
+    同一个时段内数据源不会多出任何东西，对同一只标的重复询问纯属白跑一趟。
+    休市日、节假日尤其明显：日历上没有交易日，缓存永远「缺今天」，若不记时段
+    就会每次请求都去问一遍，永远问不到结果。
+    """
+    return (ts.date(), ts.hour >= DATA_READY_HOUR)
+
 
 class Data():
     """
@@ -71,6 +89,10 @@ class Data():
     # TickFlow 可提供的扩展字段：其历史日线固定返回 OHLCV + amount，
     # 无估值/换手率等扩展列（季报级 financials 不是每日序列，不接入）。
     TICKFLOW_EXTRA_FIELDS = []
+
+    # parquet 元数据键：这只标的「已确认起点」——数据源在该日期之前没有更早的数据。
+    # 没有它，请求起点只要早于缓存首日（往往只是撞上长假）就得白跑一趟网络去确认。
+    VERIFIED_FROM_KEY = b'qka_verified_from'
 
     # ── 模拟数据源默认值 ──
     SIM_START = '2020-01-02'    # 模拟行情默认起点（调用方未给 start_date 时使用）
@@ -376,6 +398,43 @@ class Data():
             z[t] = phi * z[t - 1] + sigma * eps[t]
         return z
 
+    def _checked_recently(self, path: Path) -> bool:
+        """本时段是否已经问过数据源（以缓存文件的修改时间当记号）。
+
+        缓存文件每次被写都会刷新修改时间：首次下载、补到新数据是写出来的；
+        问了但数据源没给新数据时也会主动刷新一次（见 _download 末尾）。
+        两种情形都意味着「本时段已经核对过，数据源不会再给新东西」。
+        """
+        if not path.exists():
+            return False
+        mtime = pd.Timestamp.fromtimestamp(path.stat().st_mtime)
+        return _data_period(mtime) == _data_period(pd.Timestamp.now())
+
+    def _mark_checked(self, path: Path) -> None:
+        """留下「本时段已问过」的记号"""
+        if path.exists():
+            os.utime(path, None)
+
+    def _read_verified_from(self, path: Path):
+        """读「已确认起点」；没有记录（老缓存）返回 None"""
+        try:
+            meta = pq.read_schema(path).metadata or {}
+        except Exception:
+            return None
+        raw = meta.get(self.VERIFIED_FROM_KEY)
+        if not raw:
+            return None
+        try:
+            return pd.Timestamp(raw.decode())
+        except Exception:
+            return None
+
+    def _write_verified_from(self, path: Path, table: pa.Table, verified_from) -> None:
+        """把「已确认起点」写进 parquet 元数据后落盘（数据本身原样保留）"""
+        meta = dict(table.schema.metadata or {})
+        meta[self.VERIFIED_FROM_KEY] = verified_from.strftime('%Y-%m-%d').encode()
+        pq.write_table(table.replace_schema_metadata(meta), path)
+
     def _cache_missing_extra_fields(self, path: Path) -> bool:
         """检查已有 parquet 缓存是否缺少 extra_fields 指定的列。"""
         if not self.extra_fields or not path.exists():
@@ -419,6 +478,10 @@ class Data():
         只补下载缺失的部分（前面缺失补前面，后面缺失补后面），合并去重写回。
         若缓存缺少 extra_fields 指定的列（如从无扩展字段升级到有），则全量重新下载。
 
+        每次问完数据源都会留下痕迹：补到新数据就写文件（修改时间自然刷新），
+        没补到就刷新修改时间 + 记下「已确认起点」。这两样让重复的请求不必再问网络，
+        详见 _needs_download。
+
         Args:
             symbol: 股票代码
             download_start: 下载起始日期，格式 YYYY-MM-DD。None 表示拉全量（1990-01-01）
@@ -448,7 +511,10 @@ class Data():
             if len(df) == 0:
                 raise RuntimeError(f"{symbol}: 数据源（{self.source}）返回空数据")
             table = pa.Table.from_pandas(df)
-            pq.write_table(table, path)
+            # 这次就是从这个起点问的，一并记下「已确认起点」
+            self._write_verified_from(
+                path, table, pd.Timestamp(download_start or default_start)
+            )
             return path
 
         # ── 增量更新：检查缓存覆盖，补缺失范围 ──
@@ -461,17 +527,21 @@ class Data():
         pieces = [existing]
         changed = False
 
-        # 往前补
+        # 往前补（并记下「这个起点已确认没有更早的数据」，免得下次为同一个缺口白问）
+        old_verified = self._read_verified_from(path)
+        verified_from = old_verified
         req_start = pd.Timestamp(download_start) if download_start else None
-        if req_start is not None and req_start < cache_min:
-            end_before = (cache_min - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-            df_before = self._fetch(
-                symbol, start_date=download_start, end_date=end_before,
-                extra_fields=merged_extra,
-            )
-            if len(df_before) > 0:
-                pieces.insert(0, df_before)
-                changed = True
+        if req_start is not None and (old_verified is None or req_start < old_verified):
+            if req_start < cache_min:
+                end_before = (cache_min - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+                df_before = self._fetch(
+                    symbol, start_date=download_start, end_date=end_before,
+                    extra_fields=merged_extra,
+                )
+                if len(df_before) > 0:
+                    pieces.insert(0, df_before)
+                    changed = True
+            verified_from = req_start
 
         # 往后补
         # 口径与 _needs_download 保持一致：按「日」比较。若用带时刻的 now()，
@@ -491,13 +561,24 @@ class Data():
                 pieces.append(df_after)
                 changed = True
 
+        if not changed and verified_from == old_verified:
+            # 问过了，数据源这段确实没有新数据 —— 留个记号，本时段内不再重复问。
+            # 失败（抛异常）时不走到这里，所以网络故障该重试还是会重试。
+            self._mark_checked(path)
+            return path
+
         if changed:
             combined = pd.concat(pieces)
             combined = combined[~combined.index.duplicated(keep='last')]
             combined = combined.sort_index()
             table = pa.Table.from_pandas(combined)
-            pq.write_table(table, path)
+        else:
+            table = pa.Table.from_pandas(existing)  # 数据没动，只是要更新「已确认起点」
 
+        if verified_from is not None:
+            self._write_verified_from(path, table, verified_from)
+        else:
+            pq.write_table(table, path)
         return path
 
     def _needs_download(
@@ -508,6 +589,11 @@ class Data():
         """
         判断股票是否需要网络下载。
         缓存不存在、不覆盖请求范围、或需要拉最新数据时返回 True。
+
+        「缺最新数据」这件事按本时段去重（见 _data_period）：一天以数据生成时刻
+        切成前后两段，同一段里问过一次就够了 —— 数据源在这段时间里不会多出东西。
+        休市日、节假日的缓存末日永远早于「今天」，若不按时段去重就会每次请求都
+        白问一趟，还永远问不到结果。
         """
         path = self.target_dir / f"{symbol}.parquet"
         if not path.exists() or self._cache_missing_extra_fields(path):
@@ -517,15 +603,24 @@ class Data():
             return False
         cache_min = existing.index.min()
         cache_max = existing.index.max()
-        today = pd.Timestamp.now().floor('D')
 
-        if download_start is not None and pd.Timestamp(download_start) < cache_min:
-            return True
-        if download_end is not None and pd.Timestamp(download_end) > cache_max:
-            return True
-        # 无 end_date 时检查是否有最新数据
-        if download_end is None and cache_max < today:
-            return True
+        # 往前：起点早于缓存首日才有缺口。但这个缺口往往只是撞上长假（缓存首日
+        # 之后才是交易日），所以要看它是否已经被确认过 —— 没确认过才值得再问一趟。
+        if download_start is not None:
+            req_start = pd.Timestamp(download_start)
+            if req_start < cache_min:
+                verified_from = self._read_verified_from(path)
+                if verified_from is None or req_start < verified_from:
+                    return True
+
+        # 往后：终点晚于缓存末日（给了 end_date 就是确定的缺口，直接补）。
+        if download_end is not None:
+            return pd.Timestamp(download_end) > cache_max
+
+        # 无 end_date = 要一直要到今天。缺的只是「今天」这一段时，本时段问过就不必再问：
+        # 数据源在这段时间里不会多出东西，休市日 / 盘前盘中尤其明显，否则每次请求都要白问一趟。
+        if cache_max < pd.Timestamp.now().floor('D'):
+            return not self._checked_recently(path)
         return False
 
     def get(self, lazy: bool = False, start_date: str = None, end_date: str = None):
