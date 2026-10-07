@@ -4,7 +4,10 @@ QKA数据模块
 提供统一的数据获取、缓存和管理功能，支持多数据源、多周期、多因子的数据获取。
 """
 
+import contextlib
+import io
 import os
+import threading
 from pathlib import Path
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1108,13 +1111,22 @@ class Data():
     # ── TickFlow 数据源 ────────────────────────────────────────
 
     _tf_client = None   # 进程级复用，避免重复初始化
+    _tf_client_lock = threading.Lock()
 
     @classmethod
     def _tickflow_client(cls):
         """惰性创建并复用 TickFlow 客户端（当前走免费服务，无需 api_key）。"""
         if cls._tf_client is None:
-            from tickflow import TickFlow
-            cls._tf_client = TickFlow.free()
+            with cls._tf_client_lock:
+                if cls._tf_client is None:
+                    from tickflow import TickFlow
+                    # TickFlow.free() 会往 stdout 打一段带 emoji 的「免费档」说明。
+                    # stdout 被重定向到文件、且编码非 UTF-8 时（如打包版把后端输出
+                    # 写入 GBK 日志），print emoji 会抛 UnicodeEncodeError 而中断下载，
+                    # 故创建期间丢弃其标准输出。（redirect_stdout 改的是全局 sys.stdout，
+                    # 并发首次创建会互相覆盖，故用锁串行化。）
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        cls._tf_client = TickFlow.free()
         return cls._tf_client
 
     @staticmethod
