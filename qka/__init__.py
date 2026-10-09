@@ -20,6 +20,8 @@ from qka.core.strategy import Strategy
 from qka.core.broker import Broker
 from qka.core.sizing import SizingAccessor
 from qka.core.analysis import Analysis, Segment, AlphaBeta
+# 通达信数据源：安装目录的设置与查询（source='tdx' 时使用）
+from qka.core.tdx import set_tdx_root, get_tdx_root_info
 
 # 子模块导入
 from qka import core, utils
@@ -29,6 +31,8 @@ __all__ = [
     'Data', 'Simulate', 'Backtest', 'Strategy', 'Broker', 'DataAccessor', 'SizingAccessor',
     # 分析
     'Analysis', 'Segment', 'AlphaBeta',
+    # 通达信数据源
+    'set_tdx_root', 'get_tdx_root_info',
     # 子模块
     'core', 'utils'
 ]

@@ -21,6 +21,7 @@ from typing import List, Optional, Callable, Union
 from qka.utils.logger import logger
 from qka.core import indicator
 from qka.core.simulate import Simulate
+from qka.core import tdx
 
 # qka 内置指标裸名集合，用于 dispatch 识别（无需 qka. 前缀）
 _QKA_BUILTIN_NAMES = frozenset({
@@ -64,16 +65,17 @@ class Data():
         period (str): 数据周期，如 '1d'、'1m' 等
         adjust (str): 复权方式，如 'qfq'、'hfq'、'bfq'
         indicators (dict | Callable): 预计算指标/因子
-        source (str): 数据源，默认 'tickflow'（可选 'baostock'）
+        source (str): 数据源，默认 'tickflow'（可选 'baostock'、'tdx'）
         pool_size (int): 并发下载线程数
         datadir (Path): 数据缓存目录
         target_dir (Path): 目标存储目录
         extra_fields (List[str]): 扩展字段（选股/估值用），如 ['peTTM', 'pbMRQ', 'turn']。
-            仅 'baostock' 源提供（可选值见 BAOSTOCK_EXTRA_FIELDS）；'tickflow' 源无扩展列，会忽略
+            仅 'baostock' 源提供（可选值见 BAOSTOCK_EXTRA_FIELDS）；'tickflow' 与
+            'tdx' 源无扩展列，会忽略
     """
     
     # 支持的行情源
-    SOURCES = ('tickflow', 'baostock')
+    SOURCES = ('tickflow', 'baostock', 'tdx')
 
     # baostock query_history_k_data_plus 完整支持的基础字段（除 date 索引外）
     BAOSTOCK_BASE_FIELDS = ["open", "high", "low", "close", "volume", "amount"]
@@ -92,6 +94,8 @@ class Data():
     # TickFlow 可提供的扩展字段：其历史日线固定返回 OHLCV + amount，
     # 无估值/换手率等扩展列（季报级 financials 不是每日序列，不接入）。
     TICKFLOW_EXTRA_FIELDS = []
+    # 通达信源当前只接行情（OHLCV + amount），暂无扩展列
+    TDX_EXTRA_FIELDS = []
 
     # parquet 元数据键：这只标的「已确认起点」——数据源在该日期之前没有更早的数据。
     # 没有它，请求起点只要早于缓存首日（往往只是撞上长假）就得白跑一趟网络去确认。
@@ -152,14 +156,17 @@ class Data():
                        仅供辅助计算（β/α 等），不参与指标计算
             period: 数据周期，如 '1d'（日线）、'1m'（分钟）
             adjust: 复权方式，'qfq'（前复权）、'hfq'（后复权）、'bfq'（不复权）
-            source: 数据来源，默认 'tickflow'（可选 'baostock'）。两者返回结构一致，
-                切换源不影响上层调用；差异见各源的扩展字段能力
+            source: 数据来源，默认 'tickflow'（可选 'baostock'、'tdx'）。各源返回结构一致，
+                切换源不影响上层调用；差异见各源的扩展字段能力。'tdx' 走本机安装的
+                「支持 TQ 策略」通达信客户端（仅 Windows，需客户端在运行），安装目录的定位
+                方式见 `qka.set_tdx_root` / `qka.get_tdx_root_info`
             pool_size: 并发下载线程数
             datadir: 缓存目录路径
             indicators: 预计算指标/因子，支持三种格式：
             extra_fields: 扩展字段列表（选股/估值用，如 ['peTTM', 'pbMRQ', 'turn']），
                 可选值见 BAOSTOCK_EXTRA_FIELDS —— 仅 'baostock' 源提供；
-                'tickflow' 源无扩展列，传入的扩展字段会被静默忽略（不报错、不生成该列）。
+                'tickflow' 与 'tdx' 源无扩展列，传入的扩展字段会被静默忽略
+                （不报错、不生成该列）。
                 追加的列同样遵循 {symbol}|{field} 命名，如 '600519.SH|peTTM'。注意：
                 首次下载后缓存字段固定，变更 extra_fields 会自动检测列缺失并重新下载对应股票。
 
@@ -217,8 +224,7 @@ class Data():
         self.warmup = warmup
 
         # 当前数据源实际支持的扩展字段（源能力不同，按源过滤）
-        whitelist = (self.BAOSTOCK_EXTRA_FIELDS if source == 'baostock'
-                     else self.TICKFLOW_EXTRA_FIELDS)
+        whitelist = self._extra_fields_whitelist(source)
 
         # extra_fields 校验 + 去重
         # 未知字段（拼写错误）报错；当前源提供不了的字段静默忽略
@@ -448,6 +454,14 @@ class Data():
             return True
         return any(f not in cols for f in self.extra_fields)
 
+    def _extra_fields_whitelist(self, source: str) -> List[str]:
+        """该数据源实际支持的扩展字段（源能力不同，按源过滤）。"""
+        if source == 'baostock':
+            return self.BAOSTOCK_EXTRA_FIELDS
+        if source == 'tdx':
+            return self.TDX_EXTRA_FIELDS
+        return self.TICKFLOW_EXTRA_FIELDS
+
     def _merged_extra_fields(self, path: Path) -> List[str]:
         """
         计算本次下载实际请求的扩展字段：当前 extra_fields 与缓存已有扩展列的并集。
@@ -462,8 +476,7 @@ class Data():
             existing = set(pq.read_schema(path).names)
         except Exception:
             return merged
-        whitelist = (self.BAOSTOCK_EXTRA_FIELDS if self.source == 'baostock'
-                     else self.TICKFLOW_EXTRA_FIELDS)
+        whitelist = self._extra_fields_whitelist(self.source)
         for f in whitelist:
             if f in existing and f not in merged:
                 merged.append(f)
@@ -712,7 +725,10 @@ class Data():
             if need_calendar:
                 sim_index = self._trading_index(sim_start, sim_end)
             if need_download:
-                if self.source == 'baostock':
+                # baostock 与 tdx 都是「进程级单例连接」（tdx 的 tq 类方法
+                # 共用同一 run_id），并发调用会共用同一连接状态，故逐个下载；
+                # tickflow 的客户端无此约束，可并发。
+                if self.source in ('baostock', 'tdx'):
                     for symbol in tqdm(need_download, desc="下载数据"):
                         try:
                             self._download(symbol, download_start, download_end)
@@ -1106,6 +1122,8 @@ class Data():
         """按当前数据源分发到对应实现，返回结构一致（date 索引 + OHLCV/amount）。"""
         if self.source == 'baostock':
             return self._get_from_baostock(symbol, start_date, end_date, extra_fields)
+        if self.source == 'tdx':
+            return self._get_from_tdx(symbol, start_date, end_date, extra_fields)
         return self._get_from_tickflow(symbol, start_date, end_date, extra_fields)
 
     # ── TickFlow 数据源 ────────────────────────────────────────
@@ -1163,6 +1181,11 @@ class Data():
         """任意写法 → tickflow 写法，如 600519.SH"""
         market, code = cls._split_symbol(symbol)
         return f"{code}.{market.upper()}"
+
+    @classmethod
+    def to_tdx_symbol(cls, symbol: str) -> str:
+        """任意写法 → 通达信写法，如 600519.SH（与 tickflow 同形）"""
+        return cls.to_tickflow_symbol(symbol)
 
     def _get_from_tickflow(
         self, symbol: str,
@@ -1232,6 +1255,96 @@ class Data():
             'amount': data['amount'],
         }, index=idx)
 
+        for col in self.BAOSTOCK_BASE_FIELDS:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        return df
+
+    # ── 通达信数据源（本机 TQ 版客户端，仅 Windows）────────────────
+
+    # 通达信 get_market_data 字段名 → qka 标准列名
+    TDX_FIELD_MAP = {
+        'Open': 'open', 'High': 'high', 'Low': 'low',
+        'Close': 'close', 'Volume': 'volume', 'Amount': 'amount',
+    }
+
+    def _get_from_tdx(
+        self, symbol: str,
+        start_date: str = '1990-01-01',
+        end_date: str = '2050-12-31',
+        extra_fields: Optional[List[str]] = None,
+    ) -> pd.DataFrame:
+        """
+        从本机「支持 TQ 策略」的通达信客户端获取单只标的的日线数据。
+
+        返回结构与 _get_from_baostock 一致（date 索引 + open/high/low/close/
+        volume/amount），两处口径在本源内直接对齐：
+        - **volume**：通达信给的就是「股」，与 baostock 口径一致，原样使用
+        - **amount**：通达信单位是「万元」，×10000 换算成「元」
+
+        复权由通达信自己按 dividend_type 算好（front=前复权 / back=后复权 /
+        none=不复权），本处只做口径映射，不自行计算复权。
+
+        取数前必须先 ``refresh_kline``：通达信本地只存「下载过」的 K 线，直接查
+        没下载过的标的只会得到最新一根（历史静默缺失）。refresh_kline 让客户端
+        把该标的的 K 线补齐，本地已有时也会很快返回。
+
+        extra_fields 对通达信行情无意义（当前仅接行情，无扩展列），此处不处理。
+        """
+        # 周期映射（当前仅日线）
+        period_map = {'1d': '1d'}
+        if self.period not in period_map:
+            raise RuntimeError(
+                f"tdx 源暂不支持周期 {self.period!r}（可选: {list(period_map)}）"
+            )
+
+        # 复权映射：通达信 front=前复权 / back=后复权 / none=不复权
+        adjust_map = {'bfq': 'none', 'qfq': 'front', 'hfq': 'back'}
+        dividend_type = adjust_map.get(self.adjust, 'front')
+
+        tdx_symbol = self.to_tdx_symbol(symbol)
+        tq = tdx.get_tq()
+
+        # 通达信只认 YYYYMMDD
+        start = pd.Timestamp(start_date).strftime('%Y%m%d')
+        end = pd.Timestamp(end_date).strftime('%Y%m%d')
+
+        # 先让客户端补齐该标的的 K 线（失败返回 None），否则历史会静默缺失
+        if tq.refresh_kline(stock_list=[tdx_symbol],
+                            period=period_map[self.period]) is None:
+            raise RuntimeError(
+                f"通达信刷新 K 线缓存失败（{tdx_symbol}）："
+                "请确认「TQ 版通达信」客户端已启动并已登录。"
+            )
+
+        try:
+            raw = tq.get_market_data(
+                stock_list=[tdx_symbol],
+                start_time=start,
+                end_time=end,
+                dividend_type=dividend_type,
+                period=period_map[self.period],
+            )
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(f"通达信查询 {symbol}({tdx_symbol}) 失败: {e}") from e
+
+        # 无任何数据时返回空 dict
+        if not raw:
+            return pd.DataFrame()
+
+        # 每张字段表都是「日期为索引、列为代码」的宽表，只取当前这一列
+        cols = {}
+        for src, dst in self.TDX_FIELD_MAP.items():
+            tbl = raw.get(src)
+            if tbl is None or tdx_symbol not in getattr(tbl, 'columns', []):
+                return pd.DataFrame()
+            cols[dst] = tbl[tdx_symbol]
+
+        df = pd.DataFrame(cols)
+        df.index = pd.DatetimeIndex(df.index)
+        df.index.name = 'date'
+        df['amount'] = df['amount'] * 10000            # 万元 → 元
+        df = df[df['close'].notna()]                   # 去掉多标的并集索引带出的空行
+        df = df[~df.index.duplicated(keep='last')].sort_index()
         for col in self.BAOSTOCK_BASE_FIELDS:
             df[col] = pd.to_numeric(df[col], errors='coerce')
         return df

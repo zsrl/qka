@@ -23,10 +23,10 @@ data = Data(
 | `symbols` | `list[str \| Simulate]` | `None` | 标的列表。元素可以是 A 股代码（**`代码.市场`**，如 `'000001.SZ'`、`'600000.SH'`；也兼容 `sz.000001` 旧写法），也可以是 `Simulate` 对象（模拟标的），两者可混排，见下方「模拟标的」 |
 | `period` | `str` | `'1d'` | 数据周期，当前仅支持 `'1d'` |
 | `adjust` | `str` | `'qfq'` | 复权方式：`'qfq'` 前复权，`'hfq'` 后复权，`'bfq'` 不复权 |
-| `source` | `str` | `'tickflow'` | 数据源。`'tickflow'`（默认）行情覆盖全，**含 ETF / 可转债全历史**；`'baostock'` 提供估值等扩展字段（见 `extra_fields`） |
+| `source` | `str` | `'tickflow'` | 数据源。`'tickflow'`（默认）行情覆盖全，**含 ETF / 可转债全历史**；`'baostock'` 提供估值等扩展字段（见 `extra_fields`）；`'tdx'` 走本机「TQ 版」通达信客户端（仅 Windows，需客户端在运行），仅行情、无扩展字段，安装目录见下方「通达信数据源」 |
 | `benchmark` | `str` | `None` | 基准指数代码，如 `'000300.SH'`。下载后在 `get()` 结果中追加 `benchmark|returns` 列 |
 | `indicators` | `dict` | `None` | 预计算指标，见下方 |
-| `extra_fields` | `list[str]` | `None` | 扩展字段（选股/估值用）。**仅 `source='baostock'` 提供**；`tickflow` 源无这些列，传入会被静默忽略，见下方 |
+| `extra_fields` | `list[str]` | `None` | 扩展字段（选股/估值用）。**仅 `source='baostock'` 提供**；`tickflow` / `tdx` 源无这些列，传入会被静默忽略，见下方 |
 | `warmup` | `int` | `0` | 指标预热天数。回测/取数时自动多读 `warmup` 个交易日历史用于计算指标，使第 1 个交易日即拿到有效指标值（无需手写跳过前 N 根 bar）。仅用于计算，不增加回测 bar 数 |
 
 > **warmup（指标预热）**：若指标/因子需要较长历史窗口（如动量排名需看前 200 天），设 `warmup=200`。
@@ -46,6 +46,30 @@ data = Data(
 | 常驻列 | 公式 | 说明 |
 |------|------|------|
 | `returns` | `close.diff() / close.shift(1)` | 日收益率，始终存在，无需在 indicators 中声明 |
+
+### 通达信数据源
+
+`source='tdx'` 走本机安装的「支持 TQ 策略」通达信客户端（在进程内 `import tqcenter`，由客户端与本机 `TdxW.exe` 通信）。前提与边界：
+
+- **仅 Windows**，且用它的机器需装着 TQ 版通达信、**客户端在运行**、并已登录；
+- **只接行情**（日线 OHLCV + 成交额），**没有** `extra_fields` 扩展列；
+- 复权由通达信自己按 `adjust` 算好（`qfq`→前复权 / `hfq`→后复权 / `bfq`→不复权），qka 不另算。
+
+安装目录的定位与查询（只有该源需要）：
+
+```python
+import qka
+
+qka.get_tdx_root_info()            # {'root': 'D:\\new_tdx64', 'source': 'auto'} —— 只做识别，不建连接，可随时查
+qka.set_tdx_root(r'D:\new_tdx64')  # 代码里显式指定（优先级最高）
+```
+
+优先级：`set_tdx_root()` > 环境变量 `QKA_TDX_ROOT` > 自动读注册表识别。三者都没有时，取数会抛出带解决步骤的 `RuntimeError`。
+
+```python
+data = Data(symbols=['600519.SH'], source='tdx', adjust='qfq')
+df = data.get(start_date='2024-01-01', end_date='2026-10-09')
+```
 
 ### 模拟标的
 
@@ -98,7 +122,7 @@ r_t = drift + reversion * (logAnchor - logP_{t-1}) + vol * eps_t        eps_t ~ 
 
 `extra_fields` 追加扩展列（选股/估值用），列名同样遵循 `{symbol}|{field}` 约定（如 `000001.SZ|peTTM`），数值自动转为 `float64`。**不是指标，不参与 indicators 预计算**，是随行情一起下载的原始字段。
 
-> ⚠️ **仅 `source='baostock'` 提供**：这些扩展列来自 baostock 的 `query_history_k_data_plus` 接口。默认源 `'tickflow'` 的历史日线固定只有 OHLCV + 成交额，**没有**这些扩展列——此时传入的 `extra_fields` 会被静默忽略（不报错、也不生成对应列）。需要估值/换手率等字段时，显式用 `Data(..., source='baostock')`。
+> ⚠️ **仅 `source='baostock'` 提供**：这些扩展列来自 baostock 的 `query_history_k_data_plus` 接口。默认源 `'tickflow'` 与 `'tdx'` 的历史日线固定只有 OHLCV + 成交额，**没有**这些扩展列——此时传入的 `extra_fields` 会被静默忽略（不报错、也不生成对应列）。需要估值/换手率等字段时，显式用 `Data(..., source='baostock')`。
 
 **不传 `extra_fields` 时，每只股票默认只有 6 个行情列 + 1 个常驻列：**
 
