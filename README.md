@@ -86,6 +86,7 @@ print(bt.metrics['sharpe_ratio'])        # 夏普比率
 ## 核心能力
 
 - **数据获取** — 写个股票代码就能取到本地，自动缓存、自动补齐最新数据，重复使用秒读
+- **多数据源** — 内置 `tickflow`、`baostock`、`tdx` 三个行情源，改一个 `source=` 即可切换，各源缓存分目录存放、互不干扰
 - **技术指标** — 均线、MACD、RSI、ATR 等 ta 库全部指标，外加 α/β、夏普、最大回撤等内置指标，声明一下即可，策略里不用自己 rolling
 - **估值字段** — 换手率、涨跌幅、停牌与 ST 标记、市盈率、市净率等，需要哪些就取哪些
 - **模拟行情** — 一条 `Simulate` 就能造出单边上涨、单边下跌、来回震荡的走势，不必等真实行情，用来验证策略是不是真在按逻辑交易
@@ -149,6 +150,7 @@ print(bt.metrics['total_return_pct'])
 
 - [tickflow](https://tickflow.org) — 免费 A 股 / ETF / 可转债行情（默认数据源）
 - [baostock](http://baostock.com) — 免费 A 股数据（估值等扩展字段）
+- [通达信](https://www.tdx.com.cn) — 本机「TQ 版」客户端的行情（`source='tdx'`，仅 Windows）
 - [ta](https://github.com/bukosabino/ta) — 技术指标库
 
 ---
