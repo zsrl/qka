@@ -13,7 +13,7 @@ except PackageNotFoundError:
 
 # 核心功能直接导入
 from qka.core.simulate import Simulate
-from qka.core.data import Data
+from qka.core.data import Data, set_tickflow_api_key
 from qka.core.accessor import DataAccessor
 from qka.core.backtest import Backtest
 from qka.core.strategy import Strategy
@@ -33,6 +33,8 @@ __all__ = [
     'Analysis', 'Segment', 'AlphaBeta',
     # 通达信数据源
     'set_tdx_root', 'get_tdx_root_info',
+    # TickFlow 凭据（进程级设一次）
+    'set_tickflow_api_key',
     # 子模块
     'core', 'utils'
 ]

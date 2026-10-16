@@ -106,6 +106,42 @@ datadir/factors/{因子名}/{symbol}.parquet      # 单列，日期索引
 
 **作用范围**：只作用于默认（`lazy=False`）路径；`lazy=True`（回测走的那条）行为不变。不传 `factor_cache` 时，一切跟没有这个功能一样：不读、不写、不建目录。
 
+### TickFlow 凭据
+
+TickFlow 有两个入口，qka 按「有没有 key」自动选：
+
+| 有没有 key | 走的入口 | 域名 |
+|---|---|---|
+| 有 | 完整服务 | `https://api.tickflow.org` |
+| 没有 | 免费档 | `https://free-api.tickflow.org` |
+
+不设 key 时与旧版行为完全一致（免费档提供日线、标的元信息、交易所、池子查询、复权因子；实时行情与分钟线是完整服务的能力）。
+
+设 key 的方式是**进程级、设一次即可** —— 不用每次构造 `Data` 都传：
+
+```python
+from qka import Data, set_tickflow_api_key
+
+set_tickflow_api_key('tk_xxx')       # 设一次，之后所有 source='tickflow' 的取数都生效
+data = Data(symbols=['600519.SH'])   # 不用再传任何东西
+data.get()
+
+set_tickflow_api_key(None)           # 清除，回到免费档
+```
+
+优先级：**`set_tickflow_api_key()` > 环境变量 `TICKFLOW_API_KEY` > 免费档**（显式盖过隐式）。
+
+不想改代码的话，部署时设环境变量即可：
+
+```bash
+export TICKFLOW_API_KEY=tk_xxx
+```
+
+两点实现细节，用的时候心里有数：
+
+- 读 key 的时机是**建客户端那一刻**，不是 `import` 时 —— 所以设 key 不必早于 `import qka`。
+- 换 key（或从免费档切到 key）时，已建好的客户端会**自动作废重建**，不会继续沿用旧入口。
+
 ### 通达信数据源
 
 `source='tdx'` 走本机安装的「支持 TQ 策略」通达信客户端（在进程内 `import tqcenter`，由客户端与本机 `TdxW.exe` 通信）。前提与边界：

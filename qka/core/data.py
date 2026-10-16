@@ -48,6 +48,51 @@ def _callable_source(fn):
         return None
 
 
+# ── TickFlow 凭据（进程级，设一次即可）──────────────────────────
+# 放在模块级而不是 `Data` 参数里：「用哪个凭据」是部署级配置，不该每构造一次
+# Data 就传一遍。优先级：set_tickflow_api_key() > 环境变量 > 免费档。
+_TICKFLOW_API_KEY: Optional[str] = None
+
+
+def set_tickflow_api_key(api_key: Optional[str]) -> None:
+    """设置 TickFlow API key（进程级，设一次即可）。
+
+    设了之后所有 `Data(source='tickflow')` 都走完整服务
+    （https://api.tickflow.org）；不设则走免费档
+    （https://free-api.tickflow.org），与既有行为完全一致。
+
+    优先级：本函数设的值 > 环境变量 ``TICKFLOW_API_KEY`` > 免费档。
+
+    Args:
+        api_key: 密钥；传 None 或空串表示清除，回到免费档。
+
+    Examples:
+        >>> from qka import Data, set_tickflow_api_key
+        >>> set_tickflow_api_key('tk_xxx')
+        >>> Data(symbols=['600519.SH']).get()      # 已走完整服务
+    """
+    global _TICKFLOW_API_KEY
+    _TICKFLOW_API_KEY = api_key or None
+    # 已经建好的客户端按旧 key 建的，作废掉 —— 否则「先建了免费档客户端、
+    # 后设 key」这条时间线会静默继续走免费档，既看不出来又难查。
+    Data._reset_tickflow_clients()
+
+
+def get_tickflow_api_key() -> Optional[str]:
+    """当前生效的 TickFlow key：函数设的优先，其次环境变量，都没有则 None。"""
+    return _TICKFLOW_API_KEY or os.environ.get('TICKFLOW_API_KEY') or None
+
+
+def _key_fingerprint(api_key: Optional[str]) -> str:
+    """key 的短摘要，用作客户端缓存的键。
+
+    不拿明文 key 当字典键 —— 免得它出现在内存转储或日志里。
+    """
+    if not api_key:
+        return ''
+    return hashlib.sha1(api_key.encode('utf-8')).hexdigest()[:12]
+
+
 # 当日日线数据「可能已经生成」的时刻（本地时间）。一天以它为界切成前后两个时段：
 # 17:00 之前，数据源手里最新的一根还是上一交易日，当天这根根本还没生成；
 # 17:00 之后，当天的已经出完了，要补也就这一次。
@@ -1662,24 +1707,44 @@ class Data():
 
     # ── TickFlow 数据源 ────────────────────────────────────────
 
-    _tf_client = None   # 进程级复用，避免重复初始化
+    _tf_clients = {}    # {key 摘要: 客户端} —— 进程级复用；按 key 分开存，不同 key 不互相串
     _tf_client_lock = threading.Lock()
 
     @classmethod
+    def _reset_tickflow_clients(cls):
+        """丢掉已建好的 tickflow 客户端，下次按当前 key 重建。
+
+        由 `set_tickflow_api_key()` 调用：客户端一旦建好就缓存住，不清的话
+        「先建了免费档客户端、后设 key」会静默继续走免费档。
+        """
+        with cls._tf_client_lock:
+            cls._tf_clients.clear()
+
+    @classmethod
     def _tickflow_client(cls):
-        """惰性创建并复用 TickFlow 客户端（当前走免费服务，无需 api_key）。"""
-        if cls._tf_client is None:
+        """惰性创建并复用 TickFlow 客户端。
+
+        有 key 走完整服务（api.tickflow.org），没有就走免费档
+        （free-api.tickflow.org）。key 是**建客户端这一刻**现取的，
+        所以设 key 的时机不必早于 import（见 `set_tickflow_api_key`）。
+        """
+        key = get_tickflow_api_key()
+        cache_key = _key_fingerprint(key)
+        client = cls._tf_clients.get(cache_key)
+        if client is None:
             with cls._tf_client_lock:
-                if cls._tf_client is None:
+                client = cls._tf_clients.get(cache_key)
+                if client is None:
                     from tickflow import TickFlow
-                    # TickFlow.free() 会往 stdout 打一段带 emoji 的「免费档」说明。
+                    # free() 会往 stdout 打一段带 emoji 的「免费档」说明。
                     # stdout 被重定向到文件、且编码非 UTF-8 时（如打包版把后端输出
                     # 写入 GBK 日志），print emoji 会抛 UnicodeEncodeError 而中断下载，
                     # 故创建期间丢弃其标准输出。（redirect_stdout 改的是全局 sys.stdout，
                     # 并发首次创建会互相覆盖，故用锁串行化。）
                     with contextlib.redirect_stdout(io.StringIO()):
-                        cls._tf_client = TickFlow.free()
-        return cls._tf_client
+                        client = TickFlow(api_key=key) if key else TickFlow.free()
+                    cls._tf_clients[cache_key] = client
+        return client
 
     @staticmethod
     def _split_symbol(symbol: str):
