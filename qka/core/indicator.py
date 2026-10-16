@@ -1,13 +1,13 @@
 """
 QKA 内置指标模块
 
-提供滚动窗口的内置指标函数，供 Data.indicators 的 dispatch 使用。
+提供滚动窗口的内置指标函数，供 Data.factors 的 dispatch 使用。
 
 与 analysis.py 的分工：
 - analysis.py：接收原始 Series，返回单个标量（事后分析，如一次性 α/β/夏普）
 - indicator.py：接收 DataFrame + symbol，返回滚动 Series（回测指标，每 bar 一个值）
 
-所有函数签名统一为 fn(df, symbol, *args)，由 _apply_qka_indicators 调用。
+所有函数签名统一为 fn(df, symbol, *args)，由 _apply_qka_factors 调用。
 """
 
 import numpy as np

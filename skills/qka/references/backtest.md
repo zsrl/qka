@@ -123,7 +123,7 @@ from qka import Data, Strategy, Backtest
 
 data = Data(
     symbols=['000001.SZ'],
-    indicators={
+    factors={
         'sma_5':  ('ta.trend.sma_indicator', 'close', 5),
         'sma_20': ('ta.trend.sma_indicator', 'close', 20),
     },

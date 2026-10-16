@@ -46,13 +46,15 @@ from qka import Data
 
 data = Data(
     symbols=['000001.SZ', '600000.SH'],
-    indicators={
+    factors={
         'sma_5':  ('ta.trend.sma_indicator', 'close', 5),
         'rsi_14': ('ta.momentum.rsi', 'close', 14),
     },
 )
 df = data.get()  # 返回宽表 DataFrame，列名 {symbol}|{factor}
 ```
+
+> `factors=` 也可写作 `indicators=`（旧名，完全等价、保留兼容）；两者只能传一个。
 
 ### 策略
 
@@ -108,7 +110,7 @@ from qka import Data, Strategy, Backtest
 
 data = Data(
     symbols=['000001.SZ'],
-    indicators={
+    factors={
         'sma_5':  ('ta.trend.sma_indicator', 'close', 5),
         'sma_20': ('ta.trend.sma_indicator', 'close', 20),
     },

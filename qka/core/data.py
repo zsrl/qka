@@ -5,8 +5,12 @@ QKA数据模块
 """
 
 import contextlib
+import hashlib
+import inspect
 import io
+import json
 import os
+import textwrap
 import threading
 from pathlib import Path
 from tqdm import tqdm
@@ -30,10 +34,18 @@ _QKA_BUILTIN_NAMES = frozenset({
 })
 
 
-def _is_qka_indicator(ind_type):
+def _is_qka_factor(ind_type):
     """判断指标类型是否为 qka 内置指标（支持 qka. 前缀或裸名）。"""
     return (isinstance(ind_type, str) and
             (ind_type.startswith('qka.') or ind_type in _QKA_BUILTIN_NAMES))
+
+
+def _callable_source(fn):
+    """取可调用对象的源码文本，用于算配方指纹；取不到返回 None（表示不缓存）。"""
+    try:
+        return textwrap.dedent(inspect.getsource(fn))
+    except (OSError, TypeError):
+        return None
 
 
 # 当日日线数据「可能已经生成」的时刻（本地时间）。一天以它为界切成前后两个时段：
@@ -57,14 +69,15 @@ class Data():
     数据管理类
     
     负责股票数据的获取、缓存和管理，支持多数据源、并发下载和自定义因子计算。
-    通过 `indicators` 参数统一处理技术指标和自定义因子，在数据加载时一次性预计算。
-    
+    通过 `factors` 参数统一处理技术指标和自定义因子，在数据加载时一次性预计算。
+    （`indicators` 是同义旧名，两者完全等价、可互换，保留向后兼容。）
+
     Attributes:
         symbols (List[str]): 股票代码列表，格式「代码.市场」，如 ['600519.SH', '000001.SZ']
             （也兼容 sh.600519 旧写法，两种写法等价）
         period (str): 数据周期，如 '1d'、'1m' 等
         adjust (str): 复权方式，如 'qfq'、'hfq'、'bfq'
-        indicators (dict | Callable): 预计算指标/因子
+        factors (dict | Callable): 预计算指标/因子（旧名 `indicators` 等价）
         source (str): 数据源，默认 'tickflow'（可选 'baostock'、'tdx'）
         pool_size (int): 并发下载线程数
         datadir (Path): 数据缓存目录
@@ -76,6 +89,14 @@ class Data():
     
     # 支持的行情源
     SOURCES = ('tickflow', 'baostock', 'tdx')
+
+    # 允许「增量缓存」的复权方式。前复权（qfq）**不在其中**。
+    # 原因：前复权是「以最新价为锚」，今后的分红送股会往回改写整段历史 ——
+    # 缓存若只往后补新棒，文件里就会拼出「前段旧口径 + 后段新口径」的缝，
+    # 缝上凭空多出一根假 K 线（实测 000001.SZ 一次分红让整段等比缩 5.57%，
+    # 拼接处算出 -4.84%，真实是 +0.91%）。故前复权一律整段重取覆盖，
+    # 保证文件里永远只有一种口径。不复权 / 后复权的历史不会被改写，可以放心增量。
+    INCREMENTAL_ADJUSTS = ('bfq', 'hfq')
 
     # baostock query_history_k_data_plus 完整支持的基础字段（除 date 索引外）
     BAOSTOCK_BASE_FIELDS = ["open", "high", "low", "close", "volume", "amount"]
@@ -127,9 +148,11 @@ class Data():
         source: str = 'tickflow',
         pool_size: int = 10,
         datadir: Optional[Path] = None,
+        factors: Optional[dict] = None,
         indicators: Optional[dict] = None,
         extra_fields: Optional[List[str]] = None,
         warmup: int = 0,
+        factor_cache: bool = False,
     ):
         """
         初始化数据对象
@@ -148,31 +171,24 @@ class Data():
                 ])
                 ```
 
-                模拟标的同样支持 `indicators` / `extra_fields` / `warmup`，行为与真实源
+                模拟标的同样支持 `factors` / `extra_fields` / `warmup`，行为与真实源
                 一致（列名同样是 {symbol}|{field}，扩展列同样是「不请求就不生成」）。
                 模拟标的的行情区间由 get(start_date, end_date) 决定 —— 用 baostock 的
                 交易日历把区间内的真实交易日取出来，一 日一根，与真实源同构。
             benchmark: 基准代码，如 '000300.SH'。基准数据以 benchmark| 前缀加入最终 DataFrame，
                        仅供辅助计算（β/α 等），不参与指标计算
             period: 数据周期，如 '1d'（日线）、'1m'（分钟）
-            adjust: 复权方式，'qfq'（前复权）、'hfq'（后复权）、'bfq'（不复权）
+            adjust: 复权方式，'qfq'（前复权）、'hfq'（后复权）、'bfq'（不复权）。
+                注意缓存口径：前复权的历史会被今后的分红送股改写，故它**不做增量缓存**
+                —— 需要问数据源时整段重取覆盖，保证缓存文件里只有一种口径；
+                不复权 / 后复权的历史不会被改写，走增量缓存（只补缺口）。详见 INCREMENTAL_ADJUSTS
             source: 数据来源，默认 'tickflow'（可选 'baostock'、'tdx'）。各源返回结构一致，
                 切换源不影响上层调用；差异见各源的扩展字段能力。'tdx' 走本机安装的
                 「支持 TQ 策略」通达信客户端（仅 Windows，需客户端在运行），安装目录的定位
                 方式见 `qka.set_tdx_root` / `qka.get_tdx_root_info`
             pool_size: 并发下载线程数
             datadir: 缓存目录路径
-            indicators: 预计算指标/因子，支持三种格式：
-            extra_fields: 扩展字段列表（选股/估值用，如 ['peTTM', 'pbMRQ', 'turn']），
-                可选值见 BAOSTOCK_EXTRA_FIELDS —— 仅 'baostock' 源提供；
-                'tickflow' 与 'tdx' 源无扩展列，传入的扩展字段会被静默忽略
-                （不报错、不生成该列）。
-                追加的列同样遵循 {symbol}|{field} 命名，如 '600519.SH|peTTM'。注意：
-                首次下载后缓存字段固定，变更 extra_fields 会自动检测列缺失并重新下载对应股票。
-
-            warmup: 指标预热天数（默认 0）。回测/取数时自动多读取 warmup 个交易日的历史数据
-                用于计算指标，使第 1 个交易日即可拿到有效指标值，无需在策略里手写
-                `if len(hist) < N: continue` 跳过前 N 根 bar。仅用于计算，不会增加 on_bar 调用次数。
+            factors: 预计算指标/因子（**推荐写法**）。支持两种写法（dict / callable；不传即不算）：
 
                 **1. 字典（混搭 ta 函数和自定义因子）：**
                 ```python
@@ -187,12 +203,31 @@ class Data():
                 每个条目独立产一列，直接透传 ta 库全部指标。
                 列名参数（'close'/'high' 等）放在 ta 路径之后、数值参数之前；
                 多列函数（如 ATR）连续列出所有列名即可。
-                
+
                 **2. 函数（自定义因子）：**
                 ```python
-                indicators=lambda df: df.assign(ma5=df['close'].rolling(5).mean())
+                factors=lambda df: df.assign(ma5=df['close'].rolling(5).mean())
                 ```
                 函数接收单只股票的 DataFrame，返回添加了额外列的 DataFrame。
+
+            indicators: `factors` 的同义旧名，行为完全一致、保留向后兼容；两者同时传会报错。
+
+            extra_fields: 扩展字段列表（选股/估值用，如 ['peTTM', 'pbMRQ', 'turn']），
+                可选值见 BAOSTOCK_EXTRA_FIELDS —— 仅 'baostock' 源提供；
+                'tickflow' 与 'tdx' 源无扩展列，传入的扩展字段会被静默忽略
+                （不报错、不生成该列）。
+                追加的列同样遵循 {symbol}|{field} 命名，如 '600519.SH|peTTM'。注意：
+                首次下载后缓存字段固定，变更 extra_fields 会自动检测列缺失并重新下载对应股票。
+
+            warmup: 因子预热天数（默认 0）。回测/取数时自动多读取 warmup 个交易日的历史数据
+                用于计算因子，使第 1 个交易日即可拿到有效值，无需在策略里手写
+                `if len(hist) < N: continue` 跳过前 N 根 bar。仅用于计算，不会增加 on_bar 调用次数。
+
+            factor_cache: 是否把算出来的因子**纵向落盘**（默认 False，即不缓存）。
+                开启后，因子按 `datadir/factors/{因子名}/{symbol}.parquet` 存，
+                命中就直接读、只缺尾巴就只补尾巴；配方或数据口径变了则整条重算。
+                详见 `skills/qka/references/data.md` 的「因子缓存」。
+                只作用于默认（`lazy=False`）路径。
 
         """
         # ── 归一化 symbols：str = 真实标的，Simulate 对象 = 模拟标的，可混排 ──
@@ -217,11 +252,15 @@ class Data():
         self.benchmark = benchmark
         self.period = period
         self.adjust = adjust
+        # 该复权方式是否允许增量缓存（前复权不允许，见 INCREMENTAL_ADJUSTS）
+        self.incremental = adjust in self.INCREMENTAL_ADJUSTS
         if source not in self.SOURCES:
             raise ValueError(f"不支持的数据源: {source!r}。可选: {self.SOURCES}")
         self.source = source
         self.pool_size = pool_size
         self.warmup = warmup
+        # 因子缓存：默认关。要用得显式开（见 _factors_with_cache）
+        self.factor_cache = bool(factor_cache)
 
         # 当前数据源实际支持的扩展字段（源能力不同，按源过滤）
         whitelist = self._extra_fields_whitelist(source)
@@ -244,18 +283,24 @@ class Data():
             if f not in self.extra_fields:
                 self.extra_fields.append(f)
 
-        # 统一处理 indicators 参数
-        if callable(indicators):
+        # 统一处理 factors / indicators 参数（同一个东西的两个名字，等价）
+        if factors is not None and indicators is not None:
+            raise TypeError(
+                "factors 与 indicators 是同一个参数的新旧两个名字，"
+                "等价且只能传一个，请只传 factors"
+            )
+        specs = factors if factors is not None else indicators
+        if callable(specs):
             # 函数形式 → 保存为 callable
-            self._indicators = indicators
-        elif isinstance(indicators, dict):
+            self._factors = specs
+        elif isinstance(specs, dict):
             # 字典形式
-            self._indicators = indicators
-        elif indicators is None:
-            self._indicators = {}
+            self._factors = specs
+        elif specs is None:
+            self._factors = {}
         else:
             raise TypeError(
-                f"indicators 必须是 dict、callable 或 None，got {type(indicators)}"
+                f"factors 必须是 dict、callable 或 None，got {type(specs)}"
             )
 
         # 初始化缓存目录
@@ -494,6 +539,9 @@ class Data():
         只补下载缺失的部分（前面缺失补前面，后面缺失补后面），合并去重写回。
         若缓存缺少 extra_fields 指定的列（如从无扩展字段升级到有），则全量重新下载。
 
+        例外：不允许增量缓存的复权方式（前复权，见 INCREMENTAL_ADJUSTS）不走增量，
+        一旦需要问数据源就整段重取覆盖，详见 _rewrite_full。
+
         每次问完数据源都会留下痕迹：补到新数据就写文件（修改时间自然刷新），
         没补到就刷新修改时间 + 记下「已确认起点」。这两样让重复的请求不必再问网络，
         详见 _needs_download。
@@ -515,6 +563,14 @@ class Data():
 
         # 实际请求的扩展字段 = 当前配置 ∪ 缓存已有扩展列（列只增不减，不互相覆盖）
         merged_extra = self._merged_extra_fields(path)
+
+        # ── 不通增量的复权方式（前复权）：整段重取、整段覆盖 ──
+        # 前复权的历史会被今后的分红送股改写，只补新棒就会拼出「前段旧口径 + 后段新口径」
+        # 的缝（见 INCREMENTAL_ADJUSTS），故一旦需要问数据源就整段重新要一遍、整体替换。
+        if path.exists() and not self.incremental:
+            return self._rewrite_full(
+                path, symbol, download_start, download_end, merged_extra
+            )
 
         # ── 首次下载：只拉请求范围（缓存缺失 extra_fields 列时也全量重下）──
         if not path.exists() or self._cache_missing_extra_fields(path):
@@ -597,6 +653,54 @@ class Data():
             pq.write_table(table, path)
         return path
 
+    def _rewrite_full(
+        self, path: Path, symbol: str,
+        download_start: str = None, download_end: str = None,
+        extra_fields: Optional[List[str]] = None,
+    ) -> Path:
+        """整段重取并覆盖缓存（供不允许增量缓存的复权方式使用）。
+
+        为什么要盖住缓存已存的整段：只下「请求范围」会把长历史截短；只补缺口又会
+        留下范围外的老口径数据 —— 那也是缝。所以范围取「缓存已有范围 ∪ 请求范围」，
+        重取回来的整段是同一个口径，整体替换。
+
+        Args:
+            path: 缓存文件路径
+            symbol: 标的代码
+            download_start / download_end: 本次请求范围（None 表示不设边界）
+            extra_fields: 本次要请求的扩展字段
+
+        Returns:
+            Path: 数据文件路径
+
+        Raises:
+            RuntimeError: 数据源返回空数据（此时保留原缓存，绝不拿空数据覆盖）
+        """
+        existing = pd.read_parquet(path)
+        cache_min = existing.index.min()
+        cache_max = existing.index.max()
+
+        req_start = pd.Timestamp(download_start) if download_start else None
+        req_end = (pd.Timestamp(download_end) if download_end
+                   else pd.Timestamp.now().floor('D'))
+
+        range_start = min(x for x in (cache_min, req_start) if x is not None)
+        range_end = max(cache_max, req_end)
+
+        df = self._fetch(
+            symbol,
+            start_date=range_start.strftime('%Y-%m-%d'),
+            end_date=range_end.strftime('%Y-%m-%d'),
+            extra_fields=extra_fields,
+        )
+        if len(df) == 0:
+            raise RuntimeError(
+                f"{symbol}: 数据源（{self.source}）返回空数据，已保留原缓存"
+            )
+        # 这次就是从这个起点问的，一并记下「已确认起点」
+        self._write_verified_from(path, pa.Table.from_pandas(df), range_start)
+        return path
+
     def _needs_download(
         self, symbol: str,
         download_start: str = None,
@@ -659,18 +763,18 @@ class Data():
             lazy=True: dd.DataFrame，列名格式 {symbol}|{factor}
             没有数据时抛出 RuntimeError
 
-        注意：有指标时，start_date 会自动向后扩展 max_window 个交易日读取缓存，
-        确保指标有足够的预热数据。最终返回的 DataFrame 仍严格限定在 [start_date, end_date]。
+        注意：有因子时，start_date 会自动向后扩展 max_window 个交易日读取缓存，
+        确保因子有足够的预热数据。最终返回的 DataFrame 仍严格限定在 [start_date, end_date]。
 
         模拟标的的日期轴取自 baostock 交易日历（区间内一日一根），因此需要能登录 baostock。
         """
         if not self.symbols:
             return pd.DataFrame()
 
-        # 计算指标预热窗口
-        max_window = self._min_rows_for_indicators()
+        # 计算因子预热窗口
+        max_window = self._min_rows_for_factors()
 
-        # 构建 parquet predicate pushdown 过滤（日期 + 指标预热扩展）
+        # 构建 parquet predicate pushdown 过滤（日期 + 因子预热扩展）
         pq_filters = None
         read_start = None
         if start_date is not None or end_date is not None or max_window > 0:
@@ -679,9 +783,9 @@ class Data():
                 read_start = pd.Timestamp(start_date)
             if max_window > 0:
                 if read_start is not None:
-                    # 向后扩展，确保指标有足够的预热数据
+                    # 向后扩展，确保因子有足够的预热数据
                     read_start = read_start - pd.offsets.BDay(max_window * 2)
-                # 无 start_date 但有指标时，不需要扩展（从头读即可）
+                # 无 start_date 但有因子时，不需要扩展（从头读即可）
             if read_start is not None:
                 pq_filters.append(('date', '>=', read_start))
             if end_date is not None:
@@ -779,7 +883,7 @@ class Data():
                         continue
                     ddf = dd.read_parquet(str(parquet_path), filters=pq_filters)
                 ddf['returns'] = ddf['close'].diff() / ddf['close'].shift(1)
-                ddf = self._apply_indicators(ddf)
+                ddf = self._apply_factors(ddf)
                 column_mapping = {col: f'{symbol}|{col}' for col in ddf.columns}
                 dfs.append(ddf.rename(columns=column_mapping))
 
@@ -800,7 +904,7 @@ class Data():
                 ddf = self._add_benchmark(ddf, self.target_dir, pq_filters)
 
             # qka 内置指标（需要 benchmark 和 symbol 前缀）
-            ddf = self._apply_qka_indicators(ddf)
+            ddf = self._apply_qka_factors(ddf)
 
             return ddf
 
@@ -819,7 +923,6 @@ class Data():
                         continue
                     df = dd.read_parquet(str(parquet_path), filters=pq_filters)
                 df['returns'] = df['close'].diff() / df['close'].shift(1)
-                df = self._apply_indicators(df)
                 column_mapping = {col: f'{symbol}|{col}' for col in df.columns}
                 dfs.append(df.rename(columns=column_mapping))
 
@@ -831,6 +934,11 @@ class Data():
 
             ddf = dd.concat(dfs, axis=1, join='outer')
             result = ddf.compute()
+
+            # 因子：逐票逐因子贴上（带缓存 —— 全盖住就不算，只缺尾巴就只补尾巴）
+            # 注意在切片之前算：此时还带着预热数据，滚动窗口才够长。
+            result = self._factors_with_cache(result)
+
             # 切片回用户请求的日期范围
             if start_date is not None and max_window > 0:
                 result = result[result.index >= pd.Timestamp(start_date)]
@@ -839,10 +947,11 @@ class Data():
             if self.benchmark:
                 result = self._add_benchmark(result, self.target_dir, pq_filters)
 
-            # qka 内置指标（需要 benchmark 和 symbol 前缀）
-            result = self._apply_qka_indicators(result)
+            # qka 内置因子（需要 benchmark 和 symbol 前缀）
+            result = self._qka_factors_with_cache(result)
 
-            return result
+            # 列顺序复原，与重构前一致
+            return self._order_columns(result, self._qka_factor_names())
 
     def _add_benchmark(self, df, target_dir, pq_filters):
         """将基准数据的 returns 以 benchmark| 前缀追加到 DataFrame。"""
@@ -861,7 +970,7 @@ class Data():
             df['benchmark|returns'] = bench_returns.reindex(df.index)
             return df
 
-    def _apply_indicators(self, df):
+    def _apply_factors(self, df):
         """
         对单只股票的数据应用预定义的指标/因子。
 
@@ -876,7 +985,7 @@ class Data():
         Returns:
             DataFrame: 包含原始列和指标列
         """
-        inds = self._indicators
+        inds = self._factors
 
         # 空 → 跳过
         if not inds:
@@ -892,23 +1001,30 @@ class Data():
         if isinstance(df, dd.DataFrame):
             # 样本行数完全由 warmup 决定（用户显式声明前置窗口），不写死兜底值。
             # warmup=0 表示用户不预留前置数据，lambda 指标可能因此无法物化——属用户责任。
-            sample = df.head(self._min_rows_for_indicators())
-            meta = self._compute_indicator_cols(sample.copy())
+            sample = df.head(self._min_rows_for_factors())
+            meta = self._compute_factor_cols(sample.copy())
             return df.map_partitions(
-                lambda partition: self._compute_indicator_cols(partition.copy()),
+                lambda partition: self._compute_factor_cols(partition.copy()),
                 meta=meta,
             )
-        return self._compute_indicator_cols(df.copy())
+        return self._compute_factor_cols(df.copy())
 
-    def _compute_indicator_cols(self, df):
-        """在 pandas DataFrame 上计算指标/因子列（单只股票）。"""
+    def _compute_factor_cols(self, df, only=None):
+        """在 pandas DataFrame 上计算指标/因子列（单只股票）。
+
+        Args:
+            df: 单票 DataFrame
+            only: 只算这几个列名（None = 全算）。因子缓存按因子粒度补算时用。
+        """
 
         # 分区过小时跳过，避免 ta-lib 在 dask meta 推断时崩溃
-        min_rows = self._min_rows_for_indicators()
+        min_rows = self._min_rows_for_factors()
         if len(df) < min_rows:
             return df
 
-        for col_name, spec in self._indicators.items():
+        for col_name, spec in self._factors.items():
+            if only is not None and col_name not in only:
+                continue
             # 自定义因子（callable 值）
             if callable(spec):
                 result = spec(df)
@@ -928,22 +1044,22 @@ class Data():
 
             ind_type = spec[0]
 
-            # qka 内置指标：跳过，由 _apply_qka_indicators 集中处理
-            if _is_qka_indicator(ind_type):
+            # qka 内置指标：跳过，由 _apply_qka_factors 集中处理
+            if _is_qka_factor(ind_type):
                 continue
 
             args = list(spec[1:])
 
             # 收集前面连续的字符串参数作为列名（遇到第一个非字符串即停）
-            factors = []
+            cols = []
             rest_start = 0
             for i, arg in enumerate(args):
                 if isinstance(arg, str):
-                    factors.append(arg)
+                    cols.append(arg)
                     rest_start = i + 1
                 else:
                     break
-            if not factors:
+            if not cols:
                 logger.warning(f"指标 {col_name} 缺少计算列名，跳过")
                 continue
             rest = args[rest_start:]
@@ -966,14 +1082,14 @@ class Data():
                 logger.warning(f"无法加载指标函数 {ind_type}: {e}")
                 continue
 
-            if len(factors) == 1:
-                df[col_name] = fn(df[factors[0]], *rest)
+            if len(cols) == 1:
+                df[col_name] = fn(df[cols[0]], *rest)
             else:
-                df[col_name] = fn(*[df[f] for f in factors], *rest)
+                df[col_name] = fn(*[df[f] for f in cols], *rest)
 
         return df
 
-    def _apply_qka_indicators(self, df):
+    def _apply_qka_factors(self, df):
         """应用 qka 内置指标（带 symbol 前缀，含 benchmark 数据）。
 
         必须在 concat + 加 benchmark 之后调用，此时列名格式为
@@ -985,28 +1101,28 @@ class Data():
         Returns:
             DataFrame: 含 qka 指标列
         """
-        inds = self._indicators
+        inds = self._factors
         if not inds or not isinstance(inds, dict):
             return df
 
         qka_specs = [
             (col_name, spec) for col_name, spec in inds.items()
             if isinstance(spec, (list, tuple))
-            and _is_qka_indicator(spec[0])
+            and _is_qka_factor(spec[0])
         ]
         if not qka_specs:
             return df
 
         if isinstance(df, dd.DataFrame):
-            sample = df.head(self._min_rows_for_indicators())
-            meta = self._compute_qka_indicator_cols(sample, qka_specs)
+            sample = df.head(self._min_rows_for_factors())
+            meta = self._compute_qka_factor_cols(sample, qka_specs)
             return df.map_partitions(
-                lambda p: self._compute_qka_indicator_cols(p, qka_specs),
+                lambda p: self._compute_qka_factor_cols(p, qka_specs),
                 meta=meta,
             )
-        return self._compute_qka_indicator_cols(df, qka_specs)
+        return self._compute_qka_factor_cols(df, qka_specs)
 
-    def _compute_qka_indicator_cols(self, df, qka_specs):
+    def _compute_qka_factor_cols(self, df, qka_specs, symbols=None):
         """在已合并的 DataFrame 上计算 qka 内置指标。"""
         for col_key, spec in qka_specs:
             fn_name = spec[0].split('.', 1)[1] if spec[0].startswith('qka.') else spec[0]
@@ -1019,7 +1135,7 @@ class Data():
                 continue
 
             # 为每只股票计算
-            for symbol in self.symbols:
+            for symbol in (symbols if symbols is not None else self.symbols):
                 col = f'{symbol}|{col_key}'
                 try:
                     df[col] = fn(df, symbol, *args)
@@ -1029,16 +1145,16 @@ class Data():
 
         return df
 
-    def _min_rows_for_indicators(self):
-        """计算所有指标所需的最小行数（含显式预热天数）。
+    def _min_rows_for_factors(self):
+        """计算所有因子所需的最小行数（含显式预热天数）。
 
-        遍历所有指标条目的整数参数，取最大值作为窗口上限的保守估计，
+        遍历所有因子条目的整数参数，取最大值作为窗口上限的保守估计，
         再与显式 warmup 取较大者。
         """
-        if not self._indicators or not isinstance(self._indicators, dict):
+        if not self._factors or not isinstance(self._factors, dict):
             return self.warmup
         max_window = 0
-        for spec in self._indicators.values():
+        for spec in self._factors.values():
             if callable(spec) or not isinstance(spec, (list, tuple)):
                 continue
             # spec[1:] 中跳过所有前导字符串（列名），收集剩余整数
@@ -1050,6 +1166,293 @@ class Data():
                 if isinstance(v, int):
                     max_window = max(max_window, v)
         return max(max_window, self.warmup)
+
+    # ── 因子缓存 ────────────────────────────────────────────────
+    # 因子就是从行情算出来的「下一列」，所以跟行情一样纵向落盘。
+    # 但目录**不按数据源/周期/复权分**（那三样是「行情」的口径），而是按**因子名**分：
+    # 一个因子 = 一份独立的资产，可以单独查、单独发布、单独排名。
+    #
+    #     datadir/factors/{因子名}/{symbol}.parquet     （单列，索引同行情）
+    #
+    # 数据源 / 周期 / 复权 + 因子定义本身，一起压进文件的「配方指纹」——
+    # 只要其中任一样变了，指纹就对不上，该票该因子整条重算并覆盖。
+
+    FACTOR_DIR = 'factors'
+    FACTOR_META_KEY = b'qka_factor_meta'
+    FACTOR_CACHE_VERSION = 1
+    _UNSET = object()
+
+    def _factor_plan(self):
+        """{因子名: (定义, 指纹)}；只要有因子认不出配方就整体返回 None（这次不缓存）。
+
+        认不出的典型是「取不到源码的可调用对象」（REPL 里现写的 lambda、
+        动态拼出来的函数）——它的指纹没法跨进程稳定，宁可每次现算，
+        也不能拿旧配方算出来的值冒充新值。
+        """
+        plan = getattr(self, '_factor_plan_cache', self._UNSET)
+        if plan is not self._UNSET:
+            return plan
+
+        plan = None
+        if isinstance(self._factors, dict) and self._factors:
+            built = {}
+            for name, spec in self._factors.items():
+                fp = self._factor_signature(name, spec)
+                if fp is None:
+                    built = None
+                    break
+                built[name] = (spec, fp)
+            plan = built
+        self._factor_plan_cache = plan
+        return plan
+
+    def _factor_signature(self, name, spec):
+        """单个因子的配方指纹（定义 + 数据口径）；认不出返回 None。"""
+        payload = self._spec_payload(spec)
+        if payload is None:
+            return None
+        blob = json.dumps({
+            'v': self.FACTOR_CACHE_VERSION,
+            'name': name,
+            'spec': payload,
+            'source': self.source,
+            'period': self.period,
+            'adjust': self.adjust,
+        }, sort_keys=True, ensure_ascii=False)
+        return hashlib.sha1(blob.encode('utf-8')).hexdigest()
+
+    @staticmethod
+    def _spec_payload(spec):
+        """把一份因子定义转成可稳定序列化的结构；认不出返回 None。"""
+        if callable(spec):
+            src = _callable_source(spec)
+            return None if src is None else {'fn': src}
+        if isinstance(spec, (list, tuple)):
+            if all(isinstance(x, (str, int, float, bool)) for x in spec):
+                return list(spec)
+            return None
+        return None
+
+    def _factor_cache_path(self, name: str, symbol: str) -> Path:
+        return self.datadir / self.FACTOR_DIR / name / f'{symbol}.parquet'
+
+    def _read_factor_cache(self, name, symbol, fingerprint):
+        """读该票该因子的缓存序列；文件不在 / 指纹不符 / 读不出来 → None。
+
+        不在这里判断「盖没盖住范围」——那是 `_recompute_target` 的事：
+        盖住了就一个字不算，只缺尾巴就只补尾巴。
+        """
+        path = self._factor_cache_path(name, symbol)
+        if not path.exists():
+            return None
+        try:
+            raw = (pq.read_schema(path).metadata or {}).get(self.FACTOR_META_KEY)
+            if not raw or json.loads(raw.decode()).get('fingerprint') != fingerprint:
+                return None
+            df = pd.read_parquet(path)
+        except Exception:
+            return None
+        if df.empty or name not in df.columns or not isinstance(df.index, pd.DatetimeIndex):
+            return None
+        return df[name]
+
+    def _write_factor_cache(self, name, symbol, fingerprint, series) -> None:
+        """把该票该因子的值并进缓存文件。
+
+        同一指纹下只增不改（老值按索引保留，新算的覆盖同日）；指纹变了说明配方或
+        口径换了，整条重写——绝不把两套口径的值混在一个文件里。
+        """
+        if series is None or series.empty:
+            return
+        path = self._factor_cache_path(name, symbol)
+        merged = pd.DataFrame({name: series})
+        if path.exists():
+            try:
+                old_meta = (pq.read_schema(path).metadata or {}).get(self.FACTOR_META_KEY)
+                same = bool(old_meta) and \
+                    json.loads(old_meta.decode()).get('fingerprint') == fingerprint
+                old = pd.read_parquet(path)
+                if same and name in old.columns:
+                    merged = pd.concat([old[[name]], merged])
+                    merged = merged[~merged.index.duplicated(keep='last')].sort_index()
+            except Exception:
+                pass
+        path.parent.mkdir(parents=True, exist_ok=True)
+        table = pa.Table.from_pandas(merged)
+        meta = dict(table.schema.metadata or {})
+        meta[self.FACTOR_META_KEY] = json.dumps({
+            'fingerprint': fingerprint,
+            'v': self.FACTOR_CACHE_VERSION,
+            'source': self.source,
+            'period': self.period,
+            'adjust': self.adjust,
+        }, ensure_ascii=False).encode()
+        pq.write_table(table.replace_schema_metadata(meta), path)
+
+    def _recompute_target(self, full, cached):
+        """算出「这次要重算哪一段」。
+
+        - 没有缓存 → 整段算（返回 full）
+        - 缓存全盖住 → 不用算（返回 None）
+        - 只缺尾巴 → **只算尾巴**（往前留出预热窗口，滚动指标才准）
+        - 前面也缺 → 整段算
+        """
+        if cached is None:
+            return full
+        if cached.index.min() <= full.index.min() and cached.index.max() >= full.index.max():
+            return None
+        if cached.index.min() > full.index.min():
+            return full
+        min_rows = self._min_rows_for_factors()
+        if min_rows <= 0:
+            # 窗口完全靠猜（lambda + 没声明 warmup）⇒ 不敢只补尾巴，整段重算
+            return full
+        margin = pd.offsets.BDay(min_rows * 2)
+        tail = full.loc[cached.index.max() - margin:].copy()
+        if len(tail) < min_rows:
+            return full
+        return tail
+
+    @staticmethod
+    def _symbol_slice(result, symbol):
+        """从宽表里取出该票的列、去掉 {symbol}| 前缀（缺失返回空表）。"""
+        prefix = f'{symbol}|'
+        cols = [c for c in result.columns if c.startswith(prefix)]
+        sub = result[cols].copy()
+        sub.columns = [c[len(prefix):] for c in cols]
+        return sub
+
+    @staticmethod
+    def _attach_slice(result, symbol, sub, names):
+        for name in names:
+            if name in sub.columns:
+                result[f'{symbol}|{name}'] = sub[name]
+
+    def _qka_factor_names(self):
+        """`self._factors` 里属于 qka 内置因子（α/β/夏普…）的列名，按声明顺序。"""
+        if not isinstance(self._factors, dict):
+            return []
+        return [
+            n for n, spec in self._factors.items()
+            if isinstance(spec, (list, tuple)) and _is_qka_factor(spec[0])
+        ]
+
+    def _order_columns(self, result, qka_names):
+        """把列重排回重构前的顺序，纯粹为了不改变既有行为。
+
+        重构前：每票的行情列 → returns → ta/自定义因子，逐票成组；然后是 benchmark，
+        最后是 qka 内置因子（**先按因子名、再按标的**）。
+        因子缓存把那两类因子都挪到帧尾贴上，顺序就散了。消费者虽然都按列名取值，
+        但没理由让它们替我们承担这个差异。
+        """
+        known = set(self.symbols)
+        qka_cols = {f'{s}|{n}' for n in qka_names for s in self.symbols}
+        groups, rest, tail = {}, [], []
+        for col in result.columns:
+            if col in qka_cols:
+                tail.append(col)
+                continue
+            symbol = col.split('|', 1)[0] if '|' in col else None
+            if symbol in known:
+                groups.setdefault(symbol, []).append(col)
+            else:
+                rest.append(col)
+        order = []
+        for symbol in self.symbols:
+            order.extend(groups.get(symbol, ()))
+        order.extend(rest)
+        order.extend(tail)
+        return result[order]
+
+    def _factors_with_cache(self, result):
+        """逐票把 ta / 自定义因子贴到 result 上：命中缓存直接用，没命中才现算并写回。
+
+        只用于默认（非懒加载）路径。懒加载路径行为完全不变。
+        """
+        if not self._factors:
+            return result
+        # 没开因子缓存 → plan 强制为 None，走下面「现算不落盘」那条路
+        plan = self._factor_plan() if self.factor_cache else None
+        for symbol in self.symbols:
+            sub = self._symbol_slice(result, symbol)
+            if sub.empty:
+                continue
+
+            # 模拟标的没有缓存文件；没开缓存 / 配方认不出也一样 —— 一律现算不落盘
+            if plan is None or symbol in self._sim_specs:
+                before = set(sub.columns)
+                sub = self._apply_factors(sub)
+                self._attach_slice(
+                    result, symbol, sub, [c for c in sub.columns if c not in before]
+                )
+                continue
+
+            names = [
+                n for n, (spec, _fp) in plan.items()
+                if not (isinstance(spec, (list, tuple)) and _is_qka_factor(spec[0]))
+            ]
+            for name in names:
+                spec, fp = plan[name]
+                cached = self._read_factor_cache(name, symbol, fp)
+                target = self._recompute_target(sub, cached)
+                if target is None:
+                    sub[name] = cached.reindex(sub.index)
+                    continue
+                self._compute_factor_cols(target, only={name})
+                if target is sub:
+                    series = sub[name]
+                else:
+                    # 补算的尾巴头部自带滚动预热 NaN，用缓存里的老值兜住，
+                    # 不能拿 NaN 去覆盖本来好好的值。
+                    series = target[name].reindex(sub.index).combine_first(
+                        cached.reindex(sub.index)
+                    )
+                    sub[name] = series
+                self._write_factor_cache(name, symbol, fp, series)
+            self._attach_slice(result, symbol, sub, names)
+        return result
+
+    def _qka_factors_with_cache(self, result):
+        """逐票把 qka 内置因子（α/β/夏普…）贴上；开了因子缓存才吃缓存。需在 benchmark 之后调用。"""
+        if not self.factor_cache:
+            return self._apply_qka_factors(result)
+        plan = self._factor_plan()
+        names = []
+        if plan is not None:
+            names = [
+                n for n, (spec, _fp) in plan.items()
+                if isinstance(spec, (list, tuple)) and _is_qka_factor(spec[0])
+            ]
+        if not names:
+            return self._apply_qka_factors(result)
+
+        for name in names:
+            spec, fp = plan[name]
+            # 按「先因子名、再标的」的顺序贴，保持与重构前一致
+            for symbol in self.symbols:
+                if f'{symbol}|returns' not in result.columns:
+                    continue
+                col = f'{symbol}|{name}'
+                if symbol in self._sim_specs:
+                    # 模拟标的没有缓存文件，直接算
+                    self._compute_qka_factor_cols(result, [(name, spec)], symbols=[symbol])
+                    continue
+                cached = self._read_factor_cache(name, symbol, fp)
+                target = self._recompute_target(result, cached)
+                if target is None:
+                    result[col] = cached.reindex(result.index)
+                    continue
+                self._compute_qka_factor_cols(target, [(name, spec)])
+                if target is result:
+                    series = result[col]
+                else:
+                    # 同上：补算尾巴头部的预热 NaN 用缓存老值兜住
+                    series = target[col].reindex(result.index).combine_first(
+                        cached.reindex(result.index)
+                    )
+                    result[col] = series
+                self._write_factor_cache(name, symbol, fp, series)
+        return result
 
     def _get_from_baostock(
         self, symbol: str,

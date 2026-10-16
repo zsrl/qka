@@ -43,7 +43,7 @@ class MyStrategy(Strategy):
 ```python
 close = self.get('close')   # pd.Series，index=股票代码，value=当前价格
 high  = self.get('high')
-sma5  = self.get('sma_5')   # indicators 中定义的指标列
+sma5  = self.get('sma_5')   # factors 中定义的因子列
 ```
 
 | 属性 | 说明 |
@@ -84,7 +84,7 @@ qka 自动在 `[start_date, end_date]` 之前多读 `warmup` 天数据用于计�
 首个交易日开始（`on_bar` 调用次数不变），指标自始有效：
 
 ```python
-data = Data(symbols=[...], indicators={...}, warmup=200)   # 构造时声明预热天数
+data = Data(symbols=[...], factors={...}, warmup=200)   # 构造时声明预热天数
 ```
 
 > 注意：qka 只能从 ta 指标的整数参数自动推断预热窗口；自定义 lambda 指标推断不到，
