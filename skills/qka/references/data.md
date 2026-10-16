@@ -1,10 +1,10 @@
 ## Data
 
-数据获取和指标预计算。
+数据获取和因子预计算。
 
 ### 构造
 
-创建一个数据对象，配置数据源、股票代码和预计算指标。此时数据尚未下载，调用 `get()` 时才真正获取。
+创建一个数据对象，配置数据源、股票代码和预计算因子。此时数据尚未下载，调用 `get()` 时才真正获取。
 
 ```python
 from qka import Data
@@ -14,7 +14,7 @@ data = Data(
     period='1d',
     adjust='qfq',
     benchmark=None,
-    indicators=None,
+    factors=None,
 )
 ```
 
@@ -22,22 +22,23 @@ data = Data(
 |------|------|--------|------|
 | `symbols` | `list[str \| Simulate]` | `None` | 标的列表。元素可以是 A 股代码（**`代码.市场`**，如 `'000001.SZ'`、`'600000.SH'`；也兼容 `sz.000001` 旧写法），也可以是 `Simulate` 对象（模拟标的），两者可混排，见下方「模拟标的」 |
 | `period` | `str` | `'1d'` | 数据周期，当前仅支持 `'1d'` |
-| `adjust` | `str` | `'qfq'` | 复权方式：`'qfq'` 前复权，`'hfq'` 后复权，`'bfq'` 不复权 |
+| `adjust` | `str` | `'qfq'` | 复权方式：`'qfq'` 前复权，`'hfq'` 后复权，`'bfq'` 不复权。**它同时决定缓存策略**，见下方「缓存口径」 |
 | `source` | `str` | `'tickflow'` | 数据源。`'tickflow'`（默认）行情覆盖全，**含 ETF / 可转债全历史**；`'baostock'` 提供估值等扩展字段（见 `extra_fields`）；`'tdx'` 走本机「TQ 版」通达信客户端（仅 Windows，需客户端在运行），仅行情、无扩展字段，安装目录见下方「通达信数据源」 |
 | `benchmark` | `str` | `None` | 基准指数代码，如 `'000300.SH'`。下载后在 `get()` 结果中追加 `benchmark|returns` 列 |
-| `indicators` | `dict` | `None` | 预计算指标，见下方 |
+| `factors` | `dict \| Callable` | `None` | 预计算指标/因子，见下方。**旧名 `indicators` 完全等价、保留兼容，两者只能传一个** |
 | `extra_fields` | `list[str]` | `None` | 扩展字段（选股/估值用）。**仅 `source='baostock'` 提供**；`tickflow` / `tdx` 源无这些列，传入会被静默忽略，见下方 |
-| `warmup` | `int` | `0` | 指标预热天数。回测/取数时自动多读 `warmup` 个交易日历史用于计算指标，使第 1 个交易日即拿到有效指标值（无需手写跳过前 N 根 bar）。仅用于计算，不增加回测 bar 数 |
+| `warmup` | `int` | `0` | 因子预热天数。回测/取数时自动多读 `warmup` 个交易日历史用于计算因子，使第 1 个交易日即拿到有效值（无需手写跳过前 N 根 bar）。仅用于计算，不增加回测 bar 数 |
+| `factor_cache` | `bool` | `False` | 是否把算出来的因子**纵向落盘**（默认关）。开了才读写 `datadir/factors/…`，见下方「因子缓存」 |
 
-> **warmup（指标预热）**：若指标/因子需要较长历史窗口（如动量排名需看前 200 天），设 `warmup=200`。
-> qka 会在 `[start_date, end_date]` 之前额外多读 `warmup` 天数据用于计算指标，但返回和回测仍严格从
-> `start_date` 起——策略第 1 个 bar 指标即有值，无需 `continue` 跳过前 N 根 bar。
+> **warmup（因子预热）**：若因子需要较长历史窗口（如动量排名需看前 200 天），设 `warmup=200`。
+> qka 会在 `[start_date, end_date]` 之前额外多读 `warmup` 天数据用于计算因子，但返回和回测仍严格从
+> `start_date` 起——策略第 1 个 bar 因子即有值，无需 `continue` 跳过前 N 根 bar。
 >
 > ```python
 > data = Data(
 >     symbols=['000001.SZ'],
->     indicators={'mom200': lambda df: df['close'].pct_change(200)},
->     warmup=200,   # 自定义指标 qka 推断不出窗口，显式声明预热天数
+>     factors={'mom200': lambda df: df['close'].pct_change(200)},
+>     warmup=200,   # 自定义因子 qka 推断不出窗口，显式声明预热天数
 > )
 > ```
 
@@ -45,7 +46,44 @@ data = Data(
 
 | 常驻列 | 公式 | 说明 |
 |------|------|------|
-| `returns` | `close.diff() / close.shift(1)` | 日收益率，始终存在，无需在 indicators 中声明 |
+| `returns` | `close.diff() / close.shift(1)` | 日收益率，始终存在，无需在 factors 中声明 |
+
+### 缓存口径
+
+缓存按 `datadir/{source}/{period}/{adjust}/` 分目录存放，各复权方式互不干扰。**是否走增量，由复权方式决定**：
+
+| 复权方式 | 缓存策略 | 原因 |
+|------|------|------|
+| `bfq` 不复权、`hfq` 后复权 | **增量**：只补缓存缺的那几天 | 历史是死的，不会被将来的分红送股改写 |
+| `qfq` 前复权 | **不做增量**：需要新数据就整段重取、整段覆盖 | 前复权以「最新价」为锚，今后的分红送股会**往回改写整段历史** |
+
+前复权为什么不能增量：只往后补新棒，文件里就成了「前段旧口径 + 后段新口径」的拼接，缝上会凭空多出一根假 K 线（实测某股一次分红后整段等比缩 5.57%，拼接处算出 −4.84%，而真实是 +0.91%），而且这个错一旦写进缓存就不会自愈。
+
+代价：前复权下只要请求碰到缓存之外（最常见的是要看最新一根），就会重新下载整段历史；请求完全落在缓存内时，仍然直接读缓存。
+
+### 因子缓存
+
+**默认关闭**，要用得显式开：`Data(..., factor_cache=True)`。
+
+开启后，算出来的因子会像行情一样**纵向落盘**，但目录**按因子名分**（不按数据源/周期/复权）：
+
+```
+datadir/factors/{因子名}/{symbol}.parquet      # 单列，日期索引
+```
+
+「因子名」= `factors` 字典里的 key（也就是策略里 `self.get('mom20')` 用的那个名字）。一个因子 = 一份独立的资产，可以单独查、单独发布、单独排名。
+
+**什么时候用缓存、什么时候重算**：
+
+| 情况 | 行为 |
+|------|------|
+| 缓存盖住了请求的日期范围，配方也没变 | **一个字都不算**，直接读 |
+| 只缺后面的新数据 | **只补尾巴**（往前留出预热窗口，滚动指标才准），老值原样保留 |
+| 前面也缺 / 缓存换了配方 / 换了数据源·周期·复权 | 该票该因子**整条重算**并覆盖 |
+
+**配方指纹**：因子定义 + 数据源 + 周期 + 复权一起压成一个指纹写进文件。任一样变了指纹就对不上，自动重算——不会把两套口径的值混在一个文件里。可调用对象（lambda / 函数）取它的**源码文本**当指纹；取不到源码（REPL 里现写的、动态拼出来的）就**不缓存**，每次现算——宁可慢，也不冒"拿旧配方的值冒充新值"的风险。
+
+**作用范围**：只作用于默认（`lazy=False`）路径；`lazy=True`（回测走的那条）行为不变。不传 `factor_cache` 时，一切跟没有这个功能一样：不读、不写、不建目录。
 
 ### 通达信数据源
 
@@ -112,15 +150,15 @@ r_t = drift + reversion * (logAnchor - logP_{t-1}) + vol * eps_t        eps_t ~ 
 与真实标的的异同：
 
 - **日期轴**：取 `get(start_date, end_date)` 区间内的**真实交易日**（来自 baostock 交易日历，一日一根）。因此模拟数据同样需要能登录 baostock，且 `start_date=None` 时从 `Data.SIM_START`（`'2020-01-02'`）起算
-- **指标预热**：与真实源一致——有 `indicators` / `warmup` 时日期轴会自动向前扩展，返回结果仍严格限定在 `[start_date, end_date]`
-- **`indicators` / `extra_fields` / `warmup`**：全部照常生效，列名与真实源同样是 `{symbol}|{field}`，扩展列同样是「不请求就不生成」
+- **因子预热**：与真实源一致——有 `factors` / `warmup` 时日期轴会自动向前扩展，返回结果仍严格限定在 `[start_date, end_date]`
+- **`factors` / `extra_fields` / `warmup`**：全部照常生效，列名与真实源同样是 `{symbol}|{field}`，扩展列同样是「不请求就不生成」
 - **`benchmark`**：与标的是真是模拟无关——`Backtest.run(benchmark=...)` 照常生效，基准始终走真实数据源单独加载
 - **每次不同**：没有随机种子参数，每次调用都是新一批行情（不可复现）
 - **不落盘**：模拟标的不写缓存；`symbols` 里若全是模拟标的，连 `datadir` 都不会创建
 
 ### extra_fields 扩展字段
 
-`extra_fields` 追加扩展列（选股/估值用），列名同样遵循 `{symbol}|{field}` 约定（如 `000001.SZ|peTTM`），数值自动转为 `float64`。**不是指标，不参与 indicators 预计算**，是随行情一起下载的原始字段。
+`extra_fields` 追加扩展列（选股/估值用），列名同样遵循 `{symbol}|{field}` 约定（如 `000001.SZ|peTTM`），数值自动转为 `float64`。**不是因子，不参与 factors 预计算**，是随行情一起下载的原始字段。
 
 > ⚠️ **仅 `source='baostock'` 提供**：这些扩展列来自 baostock 的 `query_history_k_data_plus` 接口。默认源 `'tickflow'` 与 `'tdx'` 的历史日线固定只有 OHLCV + 成交额，**没有**这些扩展列——此时传入的 `extra_fields` 会被静默忽略（不报错、也不生成对应列）。需要估值/换手率等字段时，显式用 `Data(..., source='baostock')`。
 
@@ -170,9 +208,11 @@ df['000001.SZ|peTTM']   # 市盈率(TTM)，float64
 - 基准 `benchmark` 同样受 `extra_fields` 影响（同一套下载逻辑），但通常不需要
 - 数据源为 baostock 时 `extra_fields` 才生效；其他数据源忽略该参数
 
-### indicators
+### factors
 
-在构造 `Data` 时传入，利用数据加载过程一次性预计算所有指标。**不能**在构造后补充。
+在构造 `Data` 时传入，利用数据加载过程一次性预计算所有因子。**不能**在构造后补充。
+
+> `factors` 的旧名为 `indicators`，两者完全等价、保留兼容，同时传会报错；新代码请一律用 `factors`。
 
 #### 内置指标
 
@@ -181,7 +221,7 @@ df['000001.SZ|peTTM']   # 市盈率(TTM)，float64
 ```python
 data = Data(
     symbols=['000001.SZ'],
-    indicators={
+    factors={
         'sma_5':       ('ta.trend.sma_indicator', 'close', 5),
         'sma_20':      ('ta.trend.sma_indicator', 'close', 20),
         'ema_20':      ('ta.trend.ema_indicator', 'close', 20),
@@ -291,7 +331,7 @@ data = Data(
 非 ta 库的自定义因子用 callable：
 
 ```python
-indicators={
+factors={
     'ma5': lambda df: df['close'].rolling(5).mean(),
 }
 ```
@@ -306,7 +346,7 @@ qka 框架内置的滚动窗口指标，格式为 `{'列名': ('qka.函数名', 
 data = Data(
     symbols=['000001.SZ', '600000.SH'],
     benchmark='000300.SH',  # alpha/beta/information_ratio 必需
-    indicators={
+    factors={
         'sma_20':   ('ta.trend.sma_indicator', 'close', 20),
         'beta_60':  ('qka.beta', 60),
         'alpha_60': ('qka.alpha', 60),
@@ -363,7 +403,7 @@ df = data.get(start_date='2024-01-01', end_date='2024-12-31')
 **返回的宽表示例：**
 
 ```python
-data = Data(symbols=['000001.SZ', '600000.SH'], indicators={
+data = Data(symbols=['000001.SZ', '600000.SH'], factors={
     'sma_5': ('ta.trend.sma_indicator', 'close', 5),
 })
 df = data.get(start_date='2024-01-02', end_date='2024-01-05')
@@ -380,7 +420,7 @@ df = data.get(start_date='2024-01-02', end_date='2024-01-05')
 ```
 
 - 每只股票独占一组列，列前缀 = symbol
-- `returns` 列自动存在，无需在 indicators 中声明
+- `returns` 列自动存在，无需在 factors 中声明
 - 前 4 行 SMA 为 NaN（窗口=5，不足）
 - 若设了 `benchmark='000300.SH'`，末尾多一列 `benchmark|returns`
 
