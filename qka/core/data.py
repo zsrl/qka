@@ -153,6 +153,7 @@ class Data():
         extra_fields: Optional[List[str]] = None,
         warmup: int = 0,
         factor_cache: bool = False,
+        fill_suspended: bool = False,
     ):
         """
         初始化数据对象
@@ -229,6 +230,13 @@ class Data():
                 详见 `skills/qka/references/data.md` 的「因子缓存」。
                 只作用于默认（`lazy=False`）路径。
 
+            fill_suspended: 是否把**停牌日按前收补齐**（默认 False）。
+                各标的只在自己的交易日有 K 线，对齐到同一张宽表后停牌日就是空缺；
+                滚动类因子（α/β/波动率……）默认要求窗口内一天都不能缺，**停过一天牌
+                就会整条算不出来**。开启后：价格四列取前一交易日的值（当天收益率
+                变成 0），`returns` 按补齐后的 close 重算；**上市前的空缺仍然留空**。
+                只作用于默认（`lazy=False`）路径。
+
         """
         # ── 归一化 symbols：str = 真实标的，Simulate 对象 = 模拟标的，可混排 ──
         names, sim_specs = [], {}
@@ -261,6 +269,8 @@ class Data():
         self.warmup = warmup
         # 因子缓存：默认关。要用得显式开（见 _factors_with_cache）
         self.factor_cache = bool(factor_cache)
+        # 停牌日按前收填充：默认关。见 _fill_suspended_prices
+        self.fill_suspended = bool(fill_suspended)
 
         # 当前数据源实际支持的扩展字段（源能力不同，按源过滤）
         whitelist = self._extra_fields_whitelist(source)
@@ -935,6 +945,10 @@ class Data():
             ddf = dd.concat(dfs, axis=1, join='outer')
             result = ddf.compute()
 
+            # 停牌日按前收补齐（默认关，见 _fill_suspended_prices）。必须在算因子之前 ——
+            # 否则因子看到的还是带空缺的序列，长窗口照样算不出来。
+            result = self._fill_suspended_prices(result)
+
             # 因子：逐票逐因子贴上（带缓存 —— 全盖住就不算，只缺尾巴就只补尾巴）
             # 注意在切片之前算：此时还带着预热数据，滚动窗口才够长。
             result = self._factors_with_cache(result)
@@ -1182,6 +1196,59 @@ class Data():
     FACTOR_CACHE_VERSION = 1
     _UNSET = object()
 
+    # 停牌日要按前收填充的列（价格类）。停牌当天没有成交，价格就跟前一天一样；
+    # volume / amount 不填 —— 那天确实没有成交量，硬填反而不诚实。
+    SUSPENDED_FILL_COLUMNS = ('open', 'high', 'low', 'close')
+
+    def _fill_suspended_prices(self, result):
+        """把停牌日按「前收」补齐：当天价格 = 前一个交易日的收盘价。
+
+        为什么需要：各标的只在自己的交易日有 K 线，对齐到同一张宽表后，**停牌日就是空缺**。
+        而滚动类因子（α/β/波动率……）默认要求窗口内一天都不能缺 —— 只要这只票在过去 N 天里
+        停过一天牌，指标就整条算不出来。
+
+        填充口径：价格四列取前一交易日的值（当天收益率因此为 0，等价于「那天没交易」）；
+        `returns` 按填充后的 close 重算。**上市前的空缺没有前值，仍然留空** ——
+        不会凭空造出一段历史。
+
+        只作用于默认（`lazy=False`）路径，由 `fill_suspended=True` 显式开启。
+        """
+        if not self.fill_suspended:
+            return result
+        col_index = self._columns_by_symbol(result.columns)
+        replacements = {}
+        for symbol in self.symbols:
+            sym_cols = col_index.get(symbol)
+            if not sym_cols:
+                continue
+            cols = [
+                c for c in sym_cols
+                if c.split('|', 1)[1] in self.SUSPENDED_FILL_COLUMNS
+            ]
+            if not cols:
+                continue
+            before = result[cols]
+            filled = before.ffill()
+            if filled.equals(before):
+                continue        # 这只票一次没停过牌，什么都别动（省掉重算 returns）
+            for c in cols:
+                replacements[c] = filled[c]
+            if f'{symbol}|close' in cols:
+                # 口径与 get() 里一致：diff/shift，不用 pct_change（它的 fill_method 默认值在弃用中）
+                close = filled[f'{symbol}|close']
+                replacements[f'{symbol}|returns'] = close.diff() / close.shift(1)
+        if not replacements:
+            return result
+        # 一次性换掉，而不是每票各写两遍（全市场就是上万次逐列插入）。
+        # 拼回后按原列序重排，保证列顺序一点不变。
+        names = list(replacements)
+        merged = pd.concat(
+            [result.drop(columns=names),
+             pd.DataFrame(replacements, index=result.index)],
+            axis=1,
+        )
+        return merged[result.columns]
+
     def _factor_plan(self):
         """{因子名: (定义, 指纹)}；只要有因子认不出配方就整体返回 None（这次不缓存）。
 
@@ -1207,7 +1274,11 @@ class Data():
         return plan
 
     def _factor_signature(self, name, spec):
-        """单个因子的配方指纹（定义 + 数据口径）；认不出返回 None。"""
+        """单个因子的配方指纹（定义 + 数据口径）；认不出返回 None。
+
+        数据口径 = 数据源 / 周期 / 复权 / **停牌是否补齐** —— 任一样变了，
+        算出来的值就不一样，指纹必须跟着变，否则缓存会拿旧口径的值冒充新值。
+        """
         payload = self._spec_payload(spec)
         if payload is None:
             return None
@@ -1218,6 +1289,7 @@ class Data():
             'source': self.source,
             'period': self.period,
             'adjust': self.adjust,
+            'fill_suspended': self.fill_suspended,
         }, sort_keys=True, ensure_ascii=False)
         return hashlib.sha1(blob.encode('utf-8')).hexdigest()
 
@@ -1314,19 +1386,56 @@ class Data():
         return tail
 
     @staticmethod
-    def _symbol_slice(result, symbol):
-        """从宽表里取出该票的列、去掉 {symbol}| 前缀（缺失返回空表）。"""
+    def _columns_by_symbol(columns):
+        """一次遍历建「票 → 它有哪些列」的索引。
+
+        全市场宽表 6 万列，而下面几处都是按票走的：若每票都重新扫一遍全部列名，
+        就是 7556 × 6 万次字符串比较 —— 光这一项就足以把整轮跑批拖垮。
+        """
+        groups = {}
+        for col in columns:
+            if '|' in col:
+                groups.setdefault(col.split('|', 1)[0], []).append(col)
+        return groups
+
+    @staticmethod
+    def _symbol_slice(result, symbol, cols=None):
+        """从宽表里取出该票的列、去掉 {symbol}| 前缀（缺失返回空表）。
+
+        `cols` 传 ``_columns_by_symbol`` 里该票那一份，省掉一次全表扫描。
+        """
         prefix = f'{symbol}|'
-        cols = [c for c in result.columns if c.startswith(prefix)]
+        if cols is None:
+            cols = [c for c in result.columns if c.startswith(prefix)]
         sub = result[cols].copy()
         sub.columns = [c[len(prefix):] for c in cols]
         return sub
 
     @staticmethod
-    def _attach_slice(result, symbol, sub, names):
-        for name in names:
-            if name in sub.columns:
-                result[f'{symbol}|{name}'] = sub[name]
+    def _collect_slice(symbol, sub, names):
+        """把该票新算出来的列收进 ``{列名: 序列}``，交给调用方最后一次性拼上。
+
+        逐列写进结果表会让 pandas 在内存里碎成几万块（每插一列就可能多出一个
+        block），此后每次读写都得逐个遍历这些块。收集起来一次 concat，块数就稳住。
+        """
+        prefix = f'{symbol}|'
+        return {
+            f'{prefix}{name}': sub[name]
+            for name in names
+            if name in sub.columns
+        }
+
+    @staticmethod
+    def _attach_columns(result, collected):
+        """把收集到的列**一次**拼上。
+
+        这是整套流程里唯一「往结果表加列」的动作 —— 一次 concat 取代原先的
+        几万次逐列插入。
+        """
+        if not collected:
+            return result
+        new = pd.DataFrame(collected, index=result.index)
+        return pd.concat([result, new], axis=1)
 
     def _qka_factor_names(self):
         """`self._factors` 里属于 qka 内置因子（α/β/夏普…）的列名，按声明顺序。"""
@@ -1365,16 +1474,22 @@ class Data():
         return result[order]
 
     def _factors_with_cache(self, result):
-        """逐票把 ta / 自定义因子贴到 result 上：命中缓存直接用，没命中才现算并写回。
+        """逐票把 ta / 自定义因子算出来：命中缓存直接用，没命中才现算并写回。
 
         只用于默认（非懒加载）路径。懒加载路径行为完全不变。
+        新列先收在 collected 里，循环结束一次拼上（见 `_attach_columns`）。
         """
         if not self._factors:
             return result
         # 没开因子缓存 → plan 强制为 None，走下面「现算不落盘」那条路
         plan = self._factor_plan() if self.factor_cache else None
+        col_index = self._columns_by_symbol(result.columns)
+        collected = {}
         for symbol in self.symbols:
-            sub = self._symbol_slice(result, symbol)
+            cols = col_index.get(symbol)
+            if not cols:
+                continue
+            sub = self._symbol_slice(result, symbol, cols)
             if sub.empty:
                 continue
 
@@ -1382,9 +1497,9 @@ class Data():
             if plan is None or symbol in self._sim_specs:
                 before = set(sub.columns)
                 sub = self._apply_factors(sub)
-                self._attach_slice(
-                    result, symbol, sub, [c for c in sub.columns if c not in before]
-                )
+                collected.update(self._collect_slice(
+                    symbol, sub, [c for c in sub.columns if c not in before]
+                ))
                 continue
 
             names = [
@@ -1409,11 +1524,16 @@ class Data():
                     )
                     sub[name] = series
                 self._write_factor_cache(name, symbol, fp, series)
-            self._attach_slice(result, symbol, sub, names)
-        return result
+            collected.update(self._collect_slice(symbol, sub, names))
+        return self._attach_columns(result, collected)
 
     def _qka_factors_with_cache(self, result):
-        """逐票把 qka 内置因子（α/β/夏普…）贴上；开了因子缓存才吃缓存。需在 benchmark 之后调用。"""
+        """逐票把 qka 内置因子（α/β/夏普…）算出来；开了因子缓存才吃缓存。需在 benchmark 之后调用。
+
+        与 `_factors_with_cache` 一样：新列先收集、最后一次性拼上。另外这里不再
+        拿整张宽表当计算台 —— 内置因子只看该票的 returns 加基准，给它一张只含
+        这几列的小表就够了（宽表 6 万列，逐票拿它来算太贵）。
+        """
         if not self.factor_cache:
             return self._apply_qka_factors(result)
         plan = self._factor_plan()
@@ -1426,33 +1546,44 @@ class Data():
         if not names:
             return self._apply_qka_factors(result)
 
+        col_index = self._columns_by_symbol(result.columns)
+        bench_cols = col_index.get('benchmark', [])
+        collected = {}
         for name in names:
             spec, fp = plan[name]
             # 按「先因子名、再标的」的顺序贴，保持与重构前一致
             for symbol in self.symbols:
-                if f'{symbol}|returns' not in result.columns:
+                sym_cols = col_index.get(symbol)
+                if not sym_cols or f'{symbol}|returns' not in result.columns:
                     continue
                 col = f'{symbol}|{name}'
+                # 明确复制一份当计算台：内置因子要往它上面加列，而它是从宽表
+                # 切出来的视图 —— 不复制的话 pandas 每次都会警告「在切片副本上赋值」。
+                view = result[sym_cols + bench_cols].copy()
+                if view.empty:
+                    continue
                 if symbol in self._sim_specs:
                     # 模拟标的没有缓存文件，直接算
-                    self._compute_qka_factor_cols(result, [(name, spec)], symbols=[symbol])
+                    self._compute_qka_factor_cols(view, [(name, spec)], symbols=[symbol])
+                    collected[col] = view[col]
                     continue
                 cached = self._read_factor_cache(name, symbol, fp)
-                target = self._recompute_target(result, cached)
+                target = self._recompute_target(view, cached)
                 if target is None:
-                    result[col] = cached.reindex(result.index)
+                    collected[col] = cached.reindex(result.index)
                     continue
-                self._compute_qka_factor_cols(target, [(name, spec)])
-                if target is result:
-                    series = result[col]
+                # 这里给的是一张只有该票的小表，必须把标的限定成它自己
+                self._compute_qka_factor_cols(target, [(name, spec)], symbols=[symbol])
+                if target is view:
+                    series = view[col]
                 else:
                     # 同上：补算尾巴头部的预热 NaN 用缓存老值兜住
                     series = target[col].reindex(result.index).combine_first(
                         cached.reindex(result.index)
                     )
-                    result[col] = series
+                collected[col] = series
                 self._write_factor_cache(name, symbol, fp, series)
-        return result
+        return self._attach_columns(result, collected)
 
     def _get_from_baostock(
         self, symbol: str,
