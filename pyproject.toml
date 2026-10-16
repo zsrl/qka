@@ -26,6 +26,7 @@ dependencies = [
     "baostock>=0.9.1",
     "tickflow>=0.1.25",
     "statsmodels>=0.14.6",
+    "requests>=2.31.0",
 ]
 
 [project.optional-dependencies]
