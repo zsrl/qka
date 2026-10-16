@@ -197,6 +197,7 @@ class Data():
         indicators: Optional[dict] = None,
         extra_fields: Optional[List[str]] = None,
         warmup: int = 0,
+        drop_head: int = 0,
         factor_cache: bool = False,
         fill_suspended: bool = False,
     ):
@@ -269,6 +270,15 @@ class Data():
                 用于计算因子，使第 1 个交易日即可拿到有效值，无需在策略里手写
                 `if len(hist) < N: continue` 跳过前 N 根 bar。仅用于计算，不会增加 on_bar 调用次数。
 
+            drop_head: 掐头根数（默认 0，即不掐）。取回数据的**每条序列**（含基准）
+                的前 drop_head 根，`returns` 一律记空 —— 这些根只当"垫场"，不参与
+                任何因子的滚动窗口。为什么需要：次新股的头一两根 K 线是「发行价跳到
+                上市价」，那笔涨幅不是市场交易出来的（见过一天"涨 349%"的假数据），
+                掐掉之后，窗口自动需要 drop_head 根额外的真实样本 —— 上市不足
+                「窗口 + drop_head」根的票，因子整条留空，不会拿脏数据凑数。
+                与 warmup 的分工：warmup 管「往前多取多少料」，drop_head 管
+                「取回来的料开头多少根不许用」。两者互不替代，可同时使用。
+
             factor_cache: 是否把算出来的因子**纵向落盘**（默认 False，即不缓存）。
                 开启后，因子按 `datadir/factors/{因子名}/{symbol}.parquet` 存，
                 命中就直接读、只缺尾巴就只补尾巴；配方或数据口径变了则整条重算。
@@ -312,6 +322,9 @@ class Data():
         self.source = source
         self.pool_size = pool_size
         self.warmup = warmup
+        # 掐头根数：取回数据的每条序列开头 N 根，returns 记空（见 __init__ 文档）。
+        # 必须在停牌补齐**之后**生效 —— 补齐会重算 returns，先掐会被洗回来。
+        self.drop_head = int(drop_head)
         # 因子缓存：默认关。要用得显式开（见 _factors_with_cache）
         self.factor_cache = bool(factor_cache)
         # 停牌日按前收填充：默认关。见 _fill_suspended_prices
@@ -938,6 +951,7 @@ class Data():
                         continue
                     ddf = dd.read_parquet(str(parquet_path), filters=pq_filters)
                 ddf['returns'] = ddf['close'].diff() / ddf['close'].shift(1)
+                ddf = self._drop_head_lazy(ddf)
                 ddf = self._apply_factors(ddf)
                 column_mapping = {col: f'{symbol}|{col}' for col in ddf.columns}
                 dfs.append(ddf.rename(columns=column_mapping))
@@ -994,6 +1008,10 @@ class Data():
             # 否则因子看到的还是带空缺的序列，长窗口照样算不出来。
             result = self._fill_suspended_prices(result)
 
+            # 掐头（默认关，见 _drop_head_returns）。必须在补齐之后、算因子之前：
+            # 补齐会重算 returns，先掐会被洗回来；因子在后面才吃 returns。
+            result = self._drop_head_returns(result)
+
             # 因子：逐票逐因子贴上（带缓存 —— 全盖住就不算，只缺尾巴就只补尾巴）
             # 注意在切片之前算：此时还带着预热数据，滚动窗口才够长。
             result = self._factors_with_cache(result)
@@ -1020,6 +1038,13 @@ class Data():
             return df
         bench_df = pd.read_parquet(bench_path, filters=pq_filters)
         bench_df['returns'] = bench_df['close'].diff() / bench_df['close'].shift(1)
+        # 基准同样掐头：规则对所有序列一视同仁（"来啥废啥"，不猜哪天上市）
+        if self.drop_head > 0:
+            if len(bench_df) > self.drop_head:
+                cutoff = bench_df.index[self.drop_head - 1]
+                bench_df['returns'] = bench_df['returns'].where(bench_df.index > cutoff)
+            else:
+                bench_df['returns'] = np.nan
         bench_returns = bench_df['returns'].rename('benchmark|returns')
 
         if isinstance(df, dd.DataFrame):
@@ -1028,6 +1053,47 @@ class Data():
         else:
             df['benchmark|returns'] = bench_returns.reindex(df.index)
             return df
+
+    def _drop_head_returns(self, result):
+        """掐头（默认路径用）：每条序列的前 drop_head 根，returns 记空。
+
+        语义是「来啥废啥」—— 不猜哪天上市、不做探测：取回来的数据，开头 N 根
+        一律当垫场。调用方把 start 传在上市日，N 根垫场就正好是「上市后前 N 个
+        交易日」；start 传得更晚，也只是白掐 20 根（少 20 个样本），数值永远是对的。
+
+        为什么放在停牌补齐之后：补齐会按补好的 close 重算 returns，先掐会被洗回来。
+
+        定位"一只票自己的前 N 根"：按 close 非空计数（宽表里上市前的行 close 是
+        空的，不算数）；基准列没有 close，退而按 returns 自身的非空值计数。
+        """
+        if self.drop_head <= 0:
+            return result
+        for col in [c for c in result.columns if c.endswith('|returns')]:
+            base = col[:-len('|returns')]
+            close_col = result[f'{base}|close'] if f'{base}|close' in result.columns else None
+            counter = close_col if close_col is not None else result[col]
+            head = counter.notna().cumsum() <= self.drop_head
+            result.loc[head, col] = np.nan
+        return result
+
+    def _drop_head_lazy(self, ddf):
+        """掐头（懒加载路径用）：单票自己的序列，前 drop_head 根 returns 记空。
+
+        懒加载时每只票还是独立的 dask 帧（尚未拼宽表），帧的开头就是它自己的头。
+        用「第 N 个索引标签」做切点：比它晚的行保留，早的（含第 N 根）记空。
+        """
+        if self.drop_head <= 0:
+            return ddf
+        labels = ddf.index.to_series().head(self.drop_head).compute()
+        if labels.empty:
+            return ddf
+        if len(labels) < self.drop_head:
+            # 序列总共不到 N 根：整条记空
+            return ddf.map_partitions(lambda part: part.assign(returns=np.nan))
+        cutoff = labels.iloc[-1]
+        return ddf.map_partitions(
+            lambda part: part.assign(returns=part['returns'].where(part.index > cutoff))
+        )
 
     def _apply_factors(self, df):
         """
@@ -1321,7 +1387,7 @@ class Data():
     def _factor_signature(self, name, spec):
         """单个因子的配方指纹（定义 + 数据口径）；认不出返回 None。
 
-        数据口径 = 数据源 / 周期 / 复权 / **停牌是否补齐** —— 任一样变了，
+        数据口径 = 数据源 / 周期 / 复权 / **停牌是否补齐** / **掐头根数** —— 任一样变了，
         算出来的值就不一样，指纹必须跟着变，否则缓存会拿旧口径的值冒充新值。
         """
         payload = self._spec_payload(spec)
@@ -1335,6 +1401,7 @@ class Data():
             'period': self.period,
             'adjust': self.adjust,
             'fill_suspended': self.fill_suspended,
+            'drop_head': self.drop_head,
         }, sort_keys=True, ensure_ascii=False)
         return hashlib.sha1(blob.encode('utf-8')).hexdigest()
 
