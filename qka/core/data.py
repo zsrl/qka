@@ -1248,10 +1248,20 @@ class Data():
         return self._compute_qka_factor_cols(df, qka_specs)
 
     def _compute_qka_factor_cols(self, df, qka_specs, symbols=None):
-        """在已合并的 DataFrame 上计算 qka 内置指标。"""
+        """在已合并的 DataFrame 上计算 qka 内置指标。
+
+        因子定义的末位可以放一个 dict，作为**这一个因子自己的选项**，
+        只作用于它的计算，不影响别人、也不影响原始 returns：
+            ('qka.alpha', 250, {'max_abs_return': 0.5})
+            超限的那天在因子眼里记空 —— 含这一天的滚动窗口就凑不满样本，
+            因子自然算不出来（作废），原始行情和 returns 一个字不动。
+        """
         for col_key, spec in qka_specs:
             fn_name = spec[0].split('.', 1)[1] if spec[0].startswith('qka.') else spec[0]
             args = list(spec[1:])
+            # 末位 dict = 该因子的选项；不是 dict 就照旧当位置参数传下去
+            opts = args.pop() if args and isinstance(args[-1], dict) else {}
+            lim = opts.get('max_abs_return')
 
             try:
                 fn = getattr(indicator, fn_name)
@@ -1262,8 +1272,15 @@ class Data():
             # 为每只股票计算
             for symbol in (symbols if symbols is not None else self.symbols):
                 col = f'{symbol}|{col_key}'
+                work = df
+                if lim:
+                    # 净化副本：只把这只票和基准的涨降幅超限处记空，别的列原样
+                    work = df.copy()
+                    for c in (f'{symbol}|returns', 'benchmark|returns'):
+                        if c in work.columns:
+                            work[c] = work[c].where(work[c].abs() <= lim)
                 try:
-                    df[col] = fn(df, symbol, *args)
+                    df[col] = fn(work, symbol, *args)
                 except ValueError as e:
                     logger.warning(f"计算 {col_key} 失败: {e}")
                     df[col] = np.nan
@@ -1407,14 +1424,27 @@ class Data():
 
     @staticmethod
     def _spec_payload(spec):
-        """把一份因子定义转成可稳定序列化的结构；认不出返回 None。"""
+        """把一份因子定义转成可稳定序列化的结构；认不出返回 None。
+
+        末位的 dict 是「该因子自己的选项」（如 max_abs_return），也要进指纹 ——
+        选项变了，算出来的值就不一样，缓存必须跟着失效。
+        """
         if callable(spec):
             src = _callable_source(spec)
             return None if src is None else {'fn': src}
         if isinstance(spec, (list, tuple)):
-            if all(isinstance(x, (str, int, float, bool)) for x in spec):
-                return list(spec)
-            return None
+            items = []
+            for x in spec:
+                if isinstance(x, dict):
+                    if not all(isinstance(k, str) and isinstance(v, (str, int, float, bool))
+                               for k, v in x.items()):
+                        return None
+                    items.append({k: x[k] for k in sorted(x)})
+                elif isinstance(x, (str, int, float, bool)):
+                    items.append(x)
+                else:
+                    return None
+            return items
         return None
 
     def _factor_cache_path(self, name: str, symbol: str) -> Path:
