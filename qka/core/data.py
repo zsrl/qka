@@ -1084,7 +1084,9 @@ class Data():
         """
         if self.drop_head <= 0:
             return ddf
-        labels = ddf.index.to_series().head(self.drop_head).compute()
+        # 注意：dask 的 .head(n) 本身就会触发计算、返回 pandas 对象，
+        # 后面不能再 .compute()（会 AttributeError）。Backtest 走的正是 lazy 路径。
+        labels = ddf.index.to_series().head(self.drop_head)
         if labels.empty:
             return ddf
         if len(labels) < self.drop_head:
