@@ -105,8 +105,13 @@ def max_drawdown(df: pd.DataFrame, symbol: str, window: int) -> pd.Series:
     cum_values = cum.values
     result = np.full(len(cum_values), np.nan)
     for i in range(window - 1, len(cum_values)):
-        peak = np.max(cum_values[i - window + 1 : i + 1])
-        result[i] = (cum_values[i] - peak) / peak
+        seg = cum_values[i - window + 1 : i + 1]
+        # 窗口内逐日刷新峰值，再取「任意时刻从峰到谷」最深的那一次。
+        # 旧实现只算 (末值 - 窗口峰值) / 窗口峰值 —— 那是「当前回撤」（现在离最高点多远），
+        # 会漏掉中间已经发生过的深坑：净值 1 → 1.2 → 0.6 → 1.3，旧算法给 0，
+        # 实际最深跌过 -50%。与 analysis.max_drawdown 的口径也不一致。
+        peak = np.maximum.accumulate(seg)
+        result[i] = np.min(seg / peak - 1.0)
     return pd.Series(result, index=cum.index)
 
 
