@@ -30,15 +30,15 @@ def alpha(df: pd.DataFrame, symbol: str, window: int,
         window: 滚动窗口（交易日数）
         rf: 无风险利率（**年化**，小数）。两种写法：
             - 标量：全程同一个数，如 0.02
-            - 序列（带日期索引）：**取每个窗口起点那天的值**，见 _rf_at_window_start
+            - 序列（带日期索引）：**取该窗口内的平均值**，见 _rf_window_mean
         periods_per_year: 每年交易日数，默认 252
 
     Returns:
         pd.Series: 滚动 α 值
 
     Note:
-        传序列时，起点早于序列首日的窗口算不出 α（结果为 NaN）—— 宁可留空，
-        也不拿一个来路不明的常数顶上。
+        传序列时，窗口内数据不全（如序列首日之前）算不出 α（结果为 NaN）——
+        宁可留空，也不拿一个来路不明的常数顶上。
     """
     returns = df[f'{symbol}|returns']
     bench = _get_benchmark(df)
@@ -47,7 +47,7 @@ def alpha(df: pd.DataFrame, symbol: str, window: int,
     cov = returns.rolling(window).cov(bench)
     var = bench.rolling(window).var()
     beta_series = cov / var
-    rf = _rf_at_window_start(rf, df.index, window)
+    rf = _rf_window_mean(rf, df.index, window)
     return rp - (rf + beta_series * (rm - rf))
 
 
@@ -83,7 +83,7 @@ def sharpe(df: pd.DataFrame, symbol: str, window: int,
         symbol: 股票代码
         window: 滚动窗口（交易日数）
         rf: 无风险利率（**年化**，小数）。标量 = 全程一个数；
-            序列 = 取每个窗口起点那天的值（见 _rf_at_window_start）
+            序列 = 取该窗口内的平均值（见 _rf_window_mean）
         periods_per_year: 每年交易日数，默认 252
 
     Returns:
@@ -92,7 +92,7 @@ def sharpe(df: pd.DataFrame, symbol: str, window: int,
     returns = df[f'{symbol}|returns']
     rp = returns.rolling(window).mean() * periods_per_year
     vol = returns.rolling(window).std() * np.sqrt(periods_per_year)
-    rf = _rf_at_window_start(rf, df.index, window)
+    rf = _rf_window_mean(rf, df.index, window)
     return (rp - rf) / vol
 
 
@@ -198,24 +198,26 @@ def rolling_zigzag(df: pd.DataFrame, symbol: str, window: int,
     return pd.Series(result, index=idx)
 
 
-def _rf_at_window_start(rf, index, window: int):
-    """把无风险利率对齐成「每个窗口起点那天的值」。
+def _rf_window_mean(rf, index, window: int):
+    """把无风险利率对齐成「每个窗口内的平均值」。
 
     传标量时原样返回（全程一个数，老行为不变）；传序列时按下面的规则对齐。
 
-    为什么要取窗口起点、而不是窗口内的均值：
+    为什么取窗口内均值、而不是窗口起点那天的值：
 
-        α 是「期初决策」的结果 —— 投资者在窗口起点决定这笔钱放债还是放股，
-        持有到期。那这一期的机会成本就是**起点那天买入、期限等于窗口长度**
-        的无风险资产能拿到的年化收益，正好是起点当天的那个报价。
+        rf 用的是**短期**国债（真正的无风险利率，长端含期限溢价，不算无风险）。
+        短期利率的含义是「从某天起锁定一年」，只能覆盖一年 —— 拿它去代表一个
+        十年窗口的机会成本，等于说「剩下九年没有着落」。
 
-        取期内均值对应的是另一种做法（每天卖掉再买入、滚动持有），那是另一个
-        策略的收益，不是期初投资者能拿到的。
+        取窗口内均值，对应的假设是：这笔钱在整个窗口里一直滚动买入短期无风险
+        资产（到期就续上），那么整个窗口的平均年化机会成本就是各期的平均。
+        这也是 Fama-French 一脉的标准做法 —— 他们的「逐日扣减」在数学上就是
+        这个窗口均值。
 
     实现要点：
-        - `shift(window - 1)`：窗口覆盖 [t-window+1, t]，起点在 t-(window-1) 行
-        - `ffill`：窗口起点那天若恰好没有报价（国债休市但股市开市），沿用前一日
-        - 序列首日之前的窗口留空，不拿常数硬凑
+        - `ffill`：某天没有国债报价（国债休市但股市开市），沿用前一日
+        - `min_periods=window`：窗口内数据不全就留空，不拿半截样本硬凑
+        - 序列首日之前的窗口自然为空（起点卡 2010）
 
     Args:
         rf: 标量或带日期索引的 Series（年化，小数）
@@ -235,8 +237,7 @@ def _rf_at_window_start(rf, index, window: int):
     if index is not None and len(s) and isinstance(index, pd.DatetimeIndex):
         s = s.reindex(s.index.union(index)).ffill().reindex(index)
 
-    # 窗口起点早于序列首日的行会变成 NaN —— 保持 NaN，让本轮 α/夏普自然作废
-    return s.shift(window - 1)
+    return s.rolling(window, min_periods=window).mean()
 
 
 def _get_benchmark(df: pd.DataFrame) -> pd.Series:
