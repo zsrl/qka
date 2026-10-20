@@ -18,7 +18,7 @@ from qka.core.analysis import _zigzag_core
 
 
 def alpha(df: pd.DataFrame, symbol: str, window: int,
-          rf: float = 0.0, periods_per_year: int = 252) -> pd.Series:
+          rf: float | pd.Series = 0.0, periods_per_year: int = 252) -> pd.Series:
     """滚动詹森 α（年化）。
 
     公式：α = Rp - [Rf + β × (Rm - Rf)]
@@ -28,11 +28,17 @@ def alpha(df: pd.DataFrame, symbol: str, window: int,
         df: 含 {symbol}|returns 和 benchmark|returns 列的 DataFrame
         symbol: 股票代码
         window: 滚动窗口（交易日数）
-        rf: 无风险利率（年化），默认 0
+        rf: 无风险利率（**年化**，小数）。两种写法：
+            - 标量：全程同一个数，如 0.02
+            - 序列（带日期索引）：**取每个窗口起点那天的值**，见 _rf_at_window_start
         periods_per_year: 每年交易日数，默认 252
 
     Returns:
         pd.Series: 滚动 α 值
+
+    Note:
+        传序列时，起点早于序列首日的窗口算不出 α（结果为 NaN）—— 宁可留空，
+        也不拿一个来路不明的常数顶上。
     """
     returns = df[f'{symbol}|returns']
     bench = _get_benchmark(df)
@@ -41,6 +47,7 @@ def alpha(df: pd.DataFrame, symbol: str, window: int,
     cov = returns.rolling(window).cov(bench)
     var = bench.rolling(window).var()
     beta_series = cov / var
+    rf = _rf_at_window_start(rf, df.index, window)
     return rp - (rf + beta_series * (rm - rf))
 
 
@@ -65,7 +72,7 @@ def beta(df: pd.DataFrame, symbol: str, window: int) -> pd.Series:
 
 
 def sharpe(df: pd.DataFrame, symbol: str, window: int,
-           rf: float = 0.0, periods_per_year: int = 252) -> pd.Series:
+           rf: float | pd.Series = 0.0, periods_per_year: int = 252) -> pd.Series:
     """滚动夏普比率（年化）。
 
     公式：Sharpe = (Rp - rf) / σp
@@ -75,7 +82,8 @@ def sharpe(df: pd.DataFrame, symbol: str, window: int,
         df: 含 {symbol}|returns 列的 DataFrame
         symbol: 股票代码
         window: 滚动窗口（交易日数）
-        rf: 无风险利率（年化），默认 0
+        rf: 无风险利率（**年化**，小数）。标量 = 全程一个数；
+            序列 = 取每个窗口起点那天的值（见 _rf_at_window_start）
         periods_per_year: 每年交易日数，默认 252
 
     Returns:
@@ -84,6 +92,7 @@ def sharpe(df: pd.DataFrame, symbol: str, window: int,
     returns = df[f'{symbol}|returns']
     rp = returns.rolling(window).mean() * periods_per_year
     vol = returns.rolling(window).std() * np.sqrt(periods_per_year)
+    rf = _rf_at_window_start(rf, df.index, window)
     return (rp - rf) / vol
 
 
@@ -187,6 +196,47 @@ def rolling_zigzag(df: pd.DataFrame, symbol: str, window: int,
             result[i] = np.nan
 
     return pd.Series(result, index=idx)
+
+
+def _rf_at_window_start(rf, index, window: int):
+    """把无风险利率对齐成「每个窗口起点那天的值」。
+
+    传标量时原样返回（全程一个数，老行为不变）；传序列时按下面的规则对齐。
+
+    为什么要取窗口起点、而不是窗口内的均值：
+
+        α 是「期初决策」的结果 —— 投资者在窗口起点决定这笔钱放债还是放股，
+        持有到期。那这一期的机会成本就是**起点那天买入、期限等于窗口长度**
+        的无风险资产能拿到的年化收益，正好是起点当天的那个报价。
+
+        取期内均值对应的是另一种做法（每天卖掉再买入、滚动持有），那是另一个
+        策略的收益，不是期初投资者能拿到的。
+
+    实现要点：
+        - `shift(window - 1)`：窗口覆盖 [t-window+1, t]，起点在 t-(window-1) 行
+        - `ffill`：窗口起点那天若恰好没有报价（国债休市但股市开市），沿用前一日
+        - 序列首日之前的窗口留空，不拿常数硬凑
+
+    Args:
+        rf: 标量或带日期索引的 Series（年化，小数）
+        index: 目标 DataFrame 的索引（日期）
+        window: 滚动窗口长度（交易日数）
+
+    Returns:
+        float 或 与 index 对齐的 Series
+    """
+    if not isinstance(rf, pd.Series):
+        return rf
+
+    s = rf
+    if not isinstance(s.index, pd.DatetimeIndex):
+        s = s.copy()
+        s.index = pd.to_datetime(s.index)
+    if index is not None and len(s) and isinstance(index, pd.DatetimeIndex):
+        s = s.reindex(s.index.union(index)).ffill().reindex(index)
+
+    # 窗口起点早于序列首日的行会变成 NaN —— 保持 NaN，让本轮 α/夏普自然作废
+    return s.shift(window - 1)
 
 
 def _get_benchmark(df: pd.DataFrame) -> pd.Series:

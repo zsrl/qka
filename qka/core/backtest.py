@@ -42,6 +42,10 @@ class Backtest:
         self.initial_cash = None  # 由 run() 设置
         self.metrics = None
         self._benchmark_data = None
+        # 报告里算夏普用的无风险利率（年化，小数）。默认 3%，与历史报告可比。
+        # 要换口径就在 run() 之后直接改这个属性。因子那边用 Data(risk_free=...)
+        # 可以逐窗口时变，回测是一整段区间的单一指标，这里保持一个可覆写的数。
+        self.risk_free_rate = 0.03
 
     @property
     def trade_history(self):
@@ -230,8 +234,8 @@ class Backtest:
         # 年化波动率
         annual_vol = daily_returns.std() * np.sqrt(252)
 
-        # 夏普比率（无风险利率假设 3%）
-        risk_free_rate = 0.03
+        # 夏普比率（无风险利率默认 3%，可通过 self.risk_free_rate 覆写）
+        risk_free_rate = self.risk_free_rate
         sharpe = (annual_return - risk_free_rate) / annual_vol if annual_vol > 0 else 0
 
         # 最大回撤

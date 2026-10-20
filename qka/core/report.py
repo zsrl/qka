@@ -508,6 +508,7 @@ def generate_report(
     benchmark_data: Optional[pd.Series] = None,
     strategy_name: str = '未命名策略',
     output_path: Optional[str] = None,
+    risk_free: float = 0.03,
 ) -> str:
     """
     生成 HTML 回测报告
@@ -519,6 +520,7 @@ def generate_report(
         benchmark_data: 基准数据（可选）
         strategy_name: 策略名称
         output_path: 输出路径，None 则自动生成
+        risk_free: 夏普比率用的无风险利率（年化，小数），默认 3%
 
     Returns:
         str: HTML 文件路径
@@ -541,7 +543,6 @@ def generate_report(
 
     annual_return = (final / initial) ** (1 / years) - 1 if years > 0 else 0
     annual_vol = float(daily_returns.std() * np.sqrt(252))
-    risk_free = 0.03
     sharpe = (annual_return - risk_free) / annual_vol if annual_vol > 0 else 0
 
     dd_series = _calc_drawdown_series(daily_returns)

@@ -48,6 +48,40 @@ def _callable_source(fn):
         return None
 
 
+_RF_SIG_CACHE = {}
+
+
+def _accepts_rf(fn) -> bool:
+    """该指标是否接受 `rf` 参数（α / 夏普接受，其余不接受）。
+
+    签名解析只做一次并缓存 —— 否则每只票每个因子都要解析一遍，几千次纯浪费。
+    """
+    key = (getattr(fn, '__module__', ''), getattr(fn, '__name__', ''), id(fn))
+    hit = _RF_SIG_CACHE.get(key)
+    if hit is None:
+        try:
+            hit = 'rf' in inspect.signature(fn).parameters
+        except (TypeError, ValueError):
+            hit = False
+        _RF_SIG_CACHE[key] = hit
+    return hit
+
+
+def _rf_given_positionally(fn, args) -> bool:
+    """因子定义里是否已经按位置把 rf 填掉了，如 `('qka.alpha', 250, 0.02)`。
+
+    这种写法要继续有效，并且**优先于** Data 的全局 risk_free ——
+    否则两边一起给会报 `got multiple values for argument 'rf'`。
+    """
+    try:
+        sig = inspect.signature(fn)
+        # 前两个位置参数固定是 df / symbol
+        bound = sig.bind_partial(object(), object(), *args)
+    except (TypeError, ValueError):
+        return False
+    return 'rf' in bound.arguments
+
+
 # ── TickFlow 凭据（进程级，设一次即可）──────────────────────────
 # 放在模块级而不是 `Data` 参数里：「用哪个凭据」是部署级配置，不该每构造一次
 # Data 就传一遍。优先级：set_tickflow_api_key() > 环境变量 > 免费档。
@@ -91,22 +125,6 @@ def _key_fingerprint(api_key: Optional[str]) -> str:
     if not api_key:
         return ''
     return hashlib.sha1(api_key.encode('utf-8')).hexdigest()[:12]
-
-
-# 当日日线数据「可能已经生成」的时刻（本地时间）。一天以它为界切成前后两个时段：
-# 17:00 之前，数据源手里最新的一根还是上一交易日，当天这根根本还没生成；
-# 17:00 之后，当天的已经出完了，要补也就这一次。
-DATA_READY_HOUR = 17
-
-
-def _data_period(ts) -> tuple:
-    """把时刻归入「数据时段」——（日期，是否已过当日数据生成时刻）。
-
-    同一个时段内数据源不会多出任何东西，对同一只标的重复询问纯属白跑一趟。
-    休市日、节假日尤其明显：日历上没有交易日，缓存永远「缺今天」，若不记时段
-    就会每次请求都去问一遍，永远问不到结果。
-    """
-    return (ts.date(), ts.hour >= DATA_READY_HOUR)
 
 
 class Data():
@@ -200,6 +218,8 @@ class Data():
         drop_head: int = 0,
         factor_cache: bool = False,
         fill_suspended: bool = False,
+        cache_only: bool = False,
+        risk_free: Optional[Union[float, "pd.Series"]] = None,
     ):
         """
         初始化数据对象
@@ -292,6 +312,29 @@ class Data():
                 变成 0），`returns` 按补齐后的 close 重算；**上市前的空缺仍然留空**。
                 只作用于默认（`lazy=False`）路径。
 
+            cache_only: **只读本地缓存，绝不发起网络请求**（默认 False）。
+                纯读场景（回测、看报告、批量分析）请显式传 True —— 否则缓存不全时
+                会悄悄联网去补，既慢又不可控。缓存缺失时直接抛 RuntimeError 并列出
+                缺哪些标的，不会静默返回半截数据。
+
+            risk_free: **无风险利率（年化，小数）**，供 α / 夏普等需要它的因子使用。
+                不传 → 因子沿用各自默认值（α、夏普均为 0，与老版本行为一致）。
+                两种写法：
+
+                - **标量**：`0.02` —— 全程一个数，简洁但不含时变性
+                - **序列**：带日期索引的 `pd.Series`，如中债国债到期收益率曲线。
+                  因子会取**每个窗口起点那天**的值（期限要与窗口长度匹配：
+                  1 年期因子配 1 年期曲线、10 年期因子配 10 年期曲线）。
+
+                ```python
+                y1 = pd.read_csv('cn_bond_yield.csv', index_col='date', parse_dates=True)['y1'] / 100
+                data = Data(symbols=['600519.SH'], benchmark='000300.SH',
+                            factors={'alpha_1y': ('qka.alpha', 250)}, risk_free=y1)
+                ```
+
+        注：现值货币时间价值一律按**年化口径**参与运算 —— 因为 α 公式里的 Rp、Rm
+        都是「窗口均值 × 252」，rf 必须站在同一个量纲上，不要先除以 252。
+
         """
         # ── 归一化 symbols：str = 真实标的，Simulate 对象 = 模拟标的，可混排 ──
         names, sim_specs = [], {}
@@ -329,6 +372,11 @@ class Data():
         self.factor_cache = bool(factor_cache)
         # 停牌日按前收填充：默认关。见 _fill_suspended_prices
         self.fill_suspended = bool(fill_suspended)
+        # 只读模式：一次网络请求都不发（见 _needs_download / get 的缓存校验）
+        self.cache_only = bool(cache_only)
+        # 无风险利率：标量或带日期索引的序列，供 α / 夏普使用。
+        # None = 不传，因子各自用默认值（老行为不变）
+        self.risk_free = risk_free
 
         # 当前数据源实际支持的扩展字段（源能力不同，按源过滤）
         whitelist = self._extra_fields_whitelist(source)
@@ -520,23 +568,6 @@ class Data():
             z[t] = phi * z[t - 1] + sigma * eps[t]
         return z
 
-    def _checked_recently(self, path: Path) -> bool:
-        """本时段是否已经问过数据源（以缓存文件的修改时间当记号）。
-
-        缓存文件每次被写都会刷新修改时间：首次下载、补到新数据是写出来的；
-        问了但数据源没给新数据时也会主动刷新一次（见 _download 末尾）。
-        两种情形都意味着「本时段已经核对过，数据源不会再给新东西」。
-        """
-        if not path.exists():
-            return False
-        mtime = pd.Timestamp.fromtimestamp(path.stat().st_mtime)
-        return _data_period(mtime) == _data_period(pd.Timestamp.now())
-
-    def _mark_checked(self, path: Path) -> None:
-        """留下「本时段已问过」的记号"""
-        if path.exists():
-            os.utime(path, None)
-
     def _read_verified_from(self, path: Path):
         """读「已确认起点」；没有记录（老缓存）返回 None"""
         try:
@@ -690,7 +721,14 @@ class Data():
         req_end = (pd.Timestamp(download_end) if download_end
                    else pd.Timestamp.now().floor('D'))
         if req_end > cache_max:
-            start_after = (cache_max + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+            # 🚨 起点往前多留 5 天，**不要**用 cache_max+1：
+            #    TickFlow 对「单日区间」会返回空数据（2026-10-20 实测：
+            #    _fetch('2026-10-20','2026-10-20') → 0 行；
+            #    _fetch('2026-10-19','2026-10-20') → 正常 1 行）。
+            #    只补一个紧邻交易日时就是单日区间 ⇒ 增量永远静默取空。
+            #    跨周末/长假时区间自然多天，所以这个坑一直没暴露。
+            #    多取的几天下面靠 drop_duplicates(keep='last') 去掉，代价可以忽略。
+            start_after = (cache_max - pd.Timedelta(days=5)).strftime("%Y-%m-%d")
             df_after = self._fetch(
                 symbol,
                 start_date=start_after,
@@ -702,9 +740,7 @@ class Data():
                 changed = True
 
         if not changed and verified_from == old_verified:
-            # 问过了，数据源这段确实没有新数据 —— 留个记号，本时段内不再重复问。
-            # 失败（抛异常）时不走到这里，所以网络故障该重试还是会重试。
-            self._mark_checked(path)
+            # 问过了，数据源这段确实没有新数据；不改动缓存文件，直接返回。
             return path
 
         if changed:
@@ -778,11 +814,12 @@ class Data():
         判断股票是否需要网络下载。
         缓存不存在、不覆盖请求范围、或需要拉最新数据时返回 True。
 
-        「缺最新数据」这件事按本时段去重（见 _data_period）：一天以数据生成时刻
-        切成前后两段，同一段里问过一次就够了 —— 数据源在这段时间里不会多出东西。
-        休市日、节假日的缓存末日永远早于「今天」，若不按时段去重就会每次请求都
-        白问一趟，还永远问不到结果。
+        纯读场景请传 cache_only=True（见构造函数），那样一次网络请求都不会发。
         """
+        # 只读模式：不管缺不缺都不去网络（缺了由 get() 统一报错）
+        if self.cache_only:
+            return False
+
         path = self.target_dir / f"{symbol}.parquet"
         if not path.exists() or self._cache_missing_extra_fields(path):
             return True
@@ -805,11 +842,12 @@ class Data():
         if download_end is not None:
             return pd.Timestamp(download_end) > cache_max
 
-        # 无 end_date = 要一直要到今天。缺的只是「今天」这一段时，本时段问过就不必再问：
-        # 数据源在这段时间里不会多出东西，休市日 / 盘前盘中尤其明显，否则每次请求都要白问一趟。
-        if cache_max < pd.Timestamp.now().floor('D'):
-            return not self._checked_recently(path)
-        return False
+        # 无 end_date = 要一直要到今天：缓存末日早于今天就得问。
+        # 这里曾经按「数据就绪时刻（17:00）」把一天切成两段，靠文件 mtime 判断
+        # 「本时段问过没有」来省请求 —— 那是个坏设计：数据源实际就绪时间会飘到
+        # 22:00 之后，17:05 问一次空之后就会被判定「问过了」，当天再也取不到。
+        # 现在只做确定性判断，要不要联网交给调用方用 cache_only 显式声明。
+        return cache_max < pd.Timestamp.now().floor('D')
 
     def get(self, lazy: bool = False, start_date: str = None, end_date: str = None):
         """
@@ -864,6 +902,21 @@ class Data():
         # 计算网络下载范围（带预热扩展的 start_date）
         download_start = read_start.strftime("%Y-%m-%d") if read_start is not None else None
         download_end = end_date
+
+        # 只读模式：先把缓存齐不齐查一遍，缺的直接报错 —— 绝不退回联网。
+        if self.cache_only:
+            needed = list(self._real_symbols)
+            if self.benchmark and self.benchmark not in needed:
+                needed.append(self.benchmark)
+            missing = [s for s in needed
+                       if not (self.target_dir / f"{s}.parquet").exists()]
+            if missing:
+                preview = '、'.join(missing[:8])
+                more = f' 等共 {len(missing)} 只' if len(missing) > 8 else ''
+                raise RuntimeError(
+                    f"cache_only=True，但本地没有这些标的的缓存：{preview}{more}。"
+                    f" 先取数补齐，或改用 cache_only=False。"
+                )
 
         # 需要下载的真实标的（含基准）；模拟标的全在内存生成，永不下载
         all_symbols = list(self._real_symbols)
@@ -1271,6 +1324,14 @@ class Data():
                 logger.warning(f"qka 内置指标不存在: {fn_name}，跳过")
                 continue
 
+            # 无风险利率只发给签名里真有 rf 的指标（α / 夏普）：
+            # 其它指标传了关键字参数会直接报 unexpected keyword argument。
+            # 因子定义里已经按位置写了 rf 的，以它为准（老的固定写法继续有效）。
+            rf_kwargs = {}
+            if (self.risk_free is not None and _accepts_rf(fn)
+                    and not _rf_given_positionally(fn, args)):
+                rf_kwargs['rf'] = self.risk_free
+
             # 为每只股票计算
             for symbol in (symbols if symbols is not None else self.symbols):
                 col = f'{symbol}|{col_key}'
@@ -1282,7 +1343,7 @@ class Data():
                         if c in work.columns:
                             work[c] = work[c].where(work[c].abs() <= lim)
                 try:
-                    df[col] = fn(work, symbol, *args)
+                    df[col] = fn(work, symbol, *args, **rf_kwargs)
                 except ValueError as e:
                     logger.warning(f"计算 {col_key} 失败: {e}")
                     df[col] = np.nan
@@ -1403,6 +1464,35 @@ class Data():
         self._factor_plan_cache = plan
         return plan
 
+    def _risk_free_digest(self):
+        """无风险利率的稳定摘要，进因子配方指纹用。
+
+        序列动辄几千个点，不能整条塞进指纹 —— 取「长度 + 首尾日期 + 数值哈希」，
+        内容一变指纹就变，因子缓存自动失效重算。
+        """
+        rf = getattr(self, 'risk_free', None)
+        if rf is None:
+            return None
+        if not isinstance(rf, pd.Series):
+            try:
+                return {'scalar': float(rf)}
+            except (TypeError, ValueError):
+                return {'raw': str(rf)}
+        if len(rf) == 0:
+            return {'series': 'empty'}
+
+        s = rf
+        if not isinstance(s.index, pd.DatetimeIndex):
+            s = s.copy()
+            s.index = pd.to_datetime(s.index)
+        values = np.asarray(pd.to_numeric(s, errors='coerce'), dtype='float64')
+        return {
+            'series': hashlib.sha1(np.round(values, 10).tobytes()).hexdigest(),
+            'n': int(len(s)),
+            'first': str(s.index[0].date()),
+            'last': str(s.index[-1].date()),
+        }
+
     def _factor_signature(self, name, spec):
         """单个因子的配方指纹（定义 + 数据口径）；认不出返回 None。
 
@@ -1421,6 +1511,8 @@ class Data():
             'adjust': self.adjust,
             'fill_suspended': self.fill_suspended,
             'drop_head': self.drop_head,
+            # 无风险利率变了，α / 夏普的值就变了 —— 必须让指纹跟着变
+            'risk_free': self._risk_free_digest(),
         }, sort_keys=True, ensure_ascii=False)
         return hashlib.sha1(blob.encode('utf-8')).hexdigest()
 
