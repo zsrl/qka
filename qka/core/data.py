@@ -372,6 +372,9 @@ class Data():
         self.drop_head = int(drop_head)
         # 因子缓存：默认关。要用得显式开（见 _factors_with_cache）
         self.factor_cache = bool(factor_cache)
+        # 因子现在写进行情文件本身（因子就是行情表的一列），所以一票只读写一次。
+        # {symbol: (DataFrame, {因子名: 元数据})} —— 一次取数流程内复用，不跨流程持久化。
+        self._quote_cache = {}
         # 停牌日按前收填充：默认关。见 _fill_suspended_prices
         self.fill_suspended = bool(fill_suspended)
         # 只读模式：一次网络请求都不发（见 _needs_download / get 的缓存校验）
@@ -749,6 +752,11 @@ class Data():
             combined = pd.concat(pieces)
             combined = combined[~combined.index.duplicated(keep='last')]
             combined = combined.sort_index()
+            # 🚨 因子列是派生数据，必须在合并后补回旧值：
+            #    增量取数会往前多要 5 天（见上面的 start_after），那些新行只有行情列。
+            #    keep='last' 之后，重叠日期的因子值会被新行的空值覆盖 —— 不补的话，
+            #    每天更新都会悄悄抹掉最近几天的因子，而且完全看不出来。
+            combined = self._restore_factor_columns(combined, existing, path)
             table = pa.Table.from_pandas(combined)
         else:
             table = pa.Table.from_pandas(existing)  # 数据没动，只是要更新「已确认起点」
@@ -1004,7 +1012,9 @@ class Data():
                     if not parquet_path.exists():
                         logger.warning(f"数据文件不存在，跳过: {parquet_path}")
                         continue
-                    ddf = dd.read_parquet(str(parquet_path), filters=pq_filters)
+                    ddf = self._strip_factor_cols(
+                        dd.read_parquet(str(parquet_path), filters=pq_filters),
+                        parquet_path)
                 ddf['returns'] = ddf['close'].diff() / ddf['close'].shift(1)
                 ddf = self._drop_head_lazy(ddf)
                 ddf = self._apply_factors(ddf)
@@ -1045,7 +1055,9 @@ class Data():
                     if not parquet_path.exists():
                         logger.warning(f"数据文件不存在，跳过: {parquet_path}")
                         continue
-                    df = dd.read_parquet(str(parquet_path), filters=pq_filters)
+                    df = self._strip_factor_cols(
+                        dd.read_parquet(str(parquet_path), filters=pq_filters),
+                        parquet_path)
                 df['returns'] = df['close'].diff() / df['close'].shift(1)
                 column_mapping = {col: f'{symbol}|{col}' for col in df.columns}
                 dfs.append(df.rename(columns=column_mapping))
@@ -1495,6 +1507,21 @@ class Data():
             'last': str(s.index[-1].date()),
         }
 
+    def _factor_uses_rf(self, spec) -> bool:
+        """这个因子定义对应的指标是否吃 `rf`。
+
+        只有 α / 夏普吃。把无风险利率的摘要塞进所有因子的指纹会让改一次 rf
+        就作废全部 32 个因子（其中 24 个跟 rf 毫无关系），白白多算四倍。
+        """
+        if not isinstance(spec, (list, tuple)) or not spec:
+            return False
+        name = spec[0]
+        if not isinstance(name, str) or not _is_qka_factor(name):
+            return False
+        fn_name = name.split('.', 1)[1] if name.startswith('qka.') else name
+        fn = getattr(indicator, fn_name, None)
+        return fn is not None and _accepts_rf(fn)
+
     def _factor_signature(self, name, spec):
         """单个因子的配方指纹（定义 + 数据口径）；认不出返回 None。
 
@@ -1513,8 +1540,10 @@ class Data():
             'adjust': self.adjust,
             'fill_suspended': self.fill_suspended,
             'drop_head': self.drop_head,
-            # 无风险利率变了，α / 夏普的值就变了 —— 必须让指纹跟着变
-            'risk_free': self._risk_free_digest(),
+            # 无风险利率变了，α / 夏普的值就变了 —— 只对这两个系列的因子
+            # 让指纹跟着变，别把不相关的因子一起作废
+            'risk_free': (self._risk_free_digest()
+                          if self._factor_uses_rf(spec) else None),
         }, sort_keys=True, ensure_ascii=False)
         return hashlib.sha1(blob.encode('utf-8')).hexdigest()
 
@@ -1543,61 +1572,144 @@ class Data():
             return items
         return None
 
-    def _factor_cache_path(self, name: str, symbol: str) -> Path:
-        return self.datadir / self.FACTOR_DIR / name / f'{symbol}.parquet'
+    def _strip_factor_cols(self, df, path):
+        """从一只票的行情里剔掉「缓存的因子列」。
+
+        因子现在存在行情文件里，读行情时会被一起读进来 —— 但那些是缓存产物，
+        不属于行情这一层。不剔的后果：
+          ① 白读一遍用不上的列；
+          ② 本次没请求的因子也会混进返回结果（缓存里有几个就带几个）；
+          ③ 后面拼装时会和新算出来的同名列撞上。
+
+        要剔的是「文件里登记过的**全部**因子列」，不是本次请求的那几个 ——
+        否则上轮缓存的因子会漏进结果。因子列名从文件元数据取（那是唯一可靠的
+        来源）。
+
+        dask 的 drop 是纯元数据操作，不会真去读数据。
+        """
+        drop = set()
+        try:
+            raw = (pq.read_schema(path).metadata or {}).get(self.FACTOR_META_KEY)
+            metas = json.loads(raw.decode()) if raw else {}
+            if isinstance(metas, dict) and 'fingerprint' not in metas:
+                drop |= set(metas)
+        except Exception:
+            pass
+        if isinstance(self._factors, dict):
+            drop |= set(self._factors)
+        drop = [c for c in df.columns if c in drop]
+        return df.drop(columns=drop) if drop else df
+
+    def _restore_factor_columns(self, combined, existing, path):
+        """把因子列（派生数据）的旧值补回增量合并结果。
+
+        「哪些列是因子」以文件元数据里登记的为准 —— 靠列名猜不准，而元数据是
+        写因子列时一起写进去的，是唯一可靠来源。
+        """
+        try:
+            raw = (pq.read_schema(path).metadata or {}).get(self.FACTOR_META_KEY)
+            metas = json.loads(raw.decode()) if raw else {}
+        except Exception:
+            return combined
+        if not isinstance(metas, dict) or not metas:
+            return combined
+        cols = [c for c in metas if c in existing.columns and c in combined.columns]
+        if not cols:
+            return combined
+        combined[cols] = combined[cols].combine_first(
+            existing[cols].reindex(combined.index))
+        return combined
+
+    def _quote_cache_path(self, symbol: str) -> Path:
+        """行情文件路径 —— 因子现在也写在这里（因子就是行情表的一列）。"""
+        return self.target_dir / f'{symbol}.parquet'
+
+    def _load_quote_cached(self, symbol: str):
+        """读该票的行情文件（含已有因子列），一次取数流程内只读一次。
+
+        因子按列存在行情文件里，所以「读因子缓存」和「读行情」是同一个动作。
+        逐票的读写次数从「每因子一次」降到「每票一次」。
+
+        Returns:
+            (DataFrame 或 None, {因子名: 元数据})
+        """
+        hit = self._quote_cache.get(symbol)
+        if hit is not None:
+            return hit
+
+        path = self._quote_cache_path(symbol)
+        if not path.exists():
+            self._quote_cache[symbol] = (None, {})
+            return None, {}
+
+        try:
+            df = pd.read_parquet(path)
+            raw = (pq.read_schema(path).metadata or {}).get(self.FACTOR_META_KEY)
+            metas = json.loads(raw.decode()) if raw else {}
+            # 老格式是整个文件记一个 fingerprint（不区分列）。这种记录按列用不了，
+            # 视作「该票没有可用的因子记录」，那些因子会按新口径重算一次。
+            if not isinstance(metas, dict) or 'fingerprint' in metas:
+                metas = {}
+        except Exception:
+            self._quote_cache[symbol] = (None, {})
+            return None, {}
+
+        if not isinstance(df.index, pd.DatetimeIndex):
+            self._quote_cache[symbol] = (None, {})
+            return None, {}
+
+        self._quote_cache[symbol] = (df, metas)
+        return df, metas
 
     def _read_factor_cache(self, name, symbol, fingerprint):
-        """读该票该因子的缓存序列；文件不在 / 指纹不符 / 读不出来 → None。
+        """从行情文件里取该因子那一列；列不在 / 指纹不符 / 读不出来 → None。
 
         不在这里判断「盖没盖住范围」——那是 `_recompute_target` 的事：
         盖住了就一个字不算，只缺尾巴就只补尾巴。
         """
-        path = self._factor_cache_path(name, symbol)
-        if not path.exists():
+        df, metas = self._load_quote_cached(symbol)
+        if df is None or name not in df.columns:
             return None
-        try:
-            raw = (pq.read_schema(path).metadata or {}).get(self.FACTOR_META_KEY)
-            if not raw or json.loads(raw.decode()).get('fingerprint') != fingerprint:
-                return None
-            df = pd.read_parquet(path)
-        except Exception:
-            return None
-        if df.empty or name not in df.columns or not isinstance(df.index, pd.DatetimeIndex):
+        if (metas.get(name) or {}).get('fp') != fingerprint:
             return None
         return df[name]
 
-    def _write_factor_cache(self, name, symbol, fingerprint, series) -> None:
-        """把该票该因子的值并进缓存文件。
+    def _flush_factor_columns(self, pending) -> None:
+        """把这一轮新算出来的因子列并回行情文件，**每票只写一次**。
 
-        同一指纹下只增不改（老值按索引保留，新算的覆盖同日）；指纹变了说明配方或
-        口径换了，整条重写——绝不把两套口径的值混在一个文件里。
+        pending = {symbol: {因子名: (序列, 指纹)}}
+
+        必须攒够再写：parquet 不能原地加列，每次写都是整文件重写。若沿用旧的
+        「算一个因子写一次」，32 个因子就要把同一只票的文件读写 32 遍 ——
+        7819 只票累计几百 GB 的无效 IO。
         """
-        if series is None or series.empty:
-            return
-        path = self._factor_cache_path(name, symbol)
-        merged = pd.DataFrame({name: series})
-        if path.exists():
-            try:
-                old_meta = (pq.read_schema(path).metadata or {}).get(self.FACTOR_META_KEY)
-                same = bool(old_meta) and \
-                    json.loads(old_meta.decode()).get('fingerprint') == fingerprint
-                old = pd.read_parquet(path)
-                if same and name in old.columns:
-                    merged = pd.concat([old[[name]], merged])
-                    merged = merged[~merged.index.duplicated(keep='last')].sort_index()
-            except Exception:
-                pass
-        path.parent.mkdir(parents=True, exist_ok=True)
-        table = pa.Table.from_pandas(merged)
-        meta = dict(table.schema.metadata or {})
-        meta[self.FACTOR_META_KEY] = json.dumps({
-            'fingerprint': fingerprint,
-            'v': self.FACTOR_CACHE_VERSION,
-            'source': self.source,
-            'period': self.period,
-            'adjust': self.adjust,
-        }, ensure_ascii=False).encode()
-        pq.write_table(table.replace_schema_metadata(meta), path)
+        for symbol, cols in pending.items():
+            if not cols:
+                continue
+            df, metas = self._load_quote_cached(symbol)
+            if df is None:
+                continue
+
+            out = df.copy()
+            new_metas = dict(metas)
+            wrote = False
+            for name, (series, fp) in cols.items():
+                if series is None or series.empty:
+                    continue
+                # series 覆盖的是「宽表的日期轴」，裁到该票自己的日期上再落盘
+                out[name] = series.reindex(out.index)
+                new_metas[name] = {'fp': fp, 'v': self.FACTOR_CACHE_VERSION}
+                wrote = True
+            if not wrote:
+                continue
+
+            path = self._quote_cache_path(symbol)
+            table = pa.Table.from_pandas(out)
+            meta = dict(table.schema.metadata or {})
+            meta[self.FACTOR_META_KEY] = json.dumps(
+                new_metas, ensure_ascii=False).encode()
+            pq.write_table(table.replace_schema_metadata(meta), path)
+            self._quote_cache[symbol] = (out, new_metas)
 
     def _recompute_target(self, full, cached):
         """算出「这次要重算哪一段」。
@@ -1669,9 +1781,16 @@ class Data():
 
         这是整套流程里唯一「往结果表加列」的动作 —— 一次 concat 取代原先的
         几万次逐列插入。
+
+        要先剔掉宽表里同名的列：因子存在行情文件里，拼宽表时它们会被当作行情
+        一起读进来；不剔就直接 concat，会拼出重复列，之后任何按列名取数据的
+        地方都会出问题（实测：加第二个因子时整个流程崩在索引对齐上）。
         """
         if not collected:
             return result
+        overlap = [c for c in collected if c in result.columns]
+        if overlap:
+            result = result.drop(columns=overlap)
         new = pd.DataFrame(collected, index=result.index)
         return pd.concat([result, new], axis=1)
 
@@ -1723,6 +1842,8 @@ class Data():
         plan = self._factor_plan() if self.factor_cache else None
         col_index = self._columns_by_symbol(result.columns)
         collected = {}
+        # {symbol: {因子名: (序列, 指纹)}} —— 攒够一轮再写盘，见 _flush_factor_columns
+        pending = {}
         for symbol in self.symbols:
             cols = col_index.get(symbol)
             if not cols:
@@ -1744,6 +1865,7 @@ class Data():
                 n for n, (spec, _fp) in plan.items()
                 if not (isinstance(spec, (list, tuple)) and _is_qka_factor(spec[0]))
             ]
+            pending_cols = {}
             for name in names:
                 spec, fp = plan[name]
                 cached = self._read_factor_cache(name, symbol, fp)
@@ -1761,8 +1883,11 @@ class Data():
                         cached.reindex(sub.index)
                     )
                     sub[name] = series
-                self._write_factor_cache(name, symbol, fp, series)
+                pending_cols[name] = (series, fp)
+            if pending_cols:
+                pending[symbol] = pending_cols
             collected.update(self._collect_slice(symbol, sub, names))
+        self._flush_factor_columns(pending)
         return self._attach_columns(result, collected)
 
     def _qka_factors_with_cache(self, result):
@@ -1787,6 +1912,8 @@ class Data():
         col_index = self._columns_by_symbol(result.columns)
         bench_cols = col_index.get('benchmark', [])
         collected = {}
+        # {symbol: {因子名: (序列, 指纹)}} —— 攒够一轮再写盘
+        pending = {}
         for name in names:
             spec, fp = plan[name]
             # 按「先因子名、再标的」的顺序贴，保持与重构前一致
@@ -1820,7 +1947,8 @@ class Data():
                         cached.reindex(result.index)
                     )
                 collected[col] = series
-                self._write_factor_cache(name, symbol, fp, series)
+                pending.setdefault(symbol, {})[name] = (series, fp)
+        self._flush_factor_columns(pending)
         return self._attach_columns(result, collected)
 
     def _get_from_baostock(
