@@ -1211,9 +1211,17 @@ class Data():
             only: 只算这几个列名（None = 全算）。因子缓存按因子粒度补算时用。
         """
 
-        # 分区过小时跳过，避免 ta-lib 在 dask meta 推断时崩溃
-        min_rows = self._min_rows_for_factors()
-        if len(df) < min_rows:
+        # 分区过小时跳过，避免 ta-lib 在 dask meta 推断时崩溃。
+        # 只补尾巴时这张表必然比「全局最长窗口」短（10 年期 2500、1 年期只要 250），
+        # 门槛得按**本次要算的那几个因子**自己的窗口来定，否则 1 年期因子会被
+        # 2500 行的全局门槛整个拦掉、算出一片空白（2026-10-21 改）。
+        need = 0
+        if only:
+            for _n in only:
+                need = max(need, self._spec_window(self._factors.get(_n)))
+        if need <= 0:
+            need = self._min_rows_for_factors()
+        if len(df) < need:
             return df
 
         for col_name, spec in self._factors.items():
@@ -1711,29 +1719,70 @@ class Data():
             pq.write_table(table.replace_schema_metadata(meta), path)
             self._quote_cache[symbol] = (out, new_metas)
 
-    def _recompute_target(self, full, cached):
+    def _recompute_target(self, full, cached, window=None, probe_col=None):
         """算出「这次要重算哪一段」。
 
         - 没有缓存 → 整段算（返回 full）
         - 缓存全盖住 → 不用算（返回 None）
-        - 只缺尾巴 → **只算尾巴**（往前留出预热窗口，滚动指标才准）
+        - 只缺尾巴 → **只算尾巴**（往前只留该因子自己那一个窗口当预热）
         - 前面也缺 → 整段算
+
+        ⚠️ 预热只留「一个窗口」，不是两倍（2026-10-21 改）：算第 t 天的值，滚动
+        窗口最多用到 t-window+1 那天的数据，而调用方只把缓存末日之后的行写回，
+        多留的窗口纯属白算。之前固定按「全局最长窗口 × 2」= 5000 个工作日回溯，
+        等于把 2007 年以来的因子全部重算一遍，连只需 250 天的 1 年期因子也被拖着走。
+
+        ⚠️ 预热按**交易日位置**回溯，不按工作日推算：`BDay(2500)` 只覆盖约 1712 个
+        交易日（节假日不算工作日），长窗口因子会预热不足、尾部一串 NaN。
         """
         if cached is None:
             return full
         if cached.index.min() <= full.index.min() and cached.index.max() >= full.index.max():
             return None
         if cached.index.min() > full.index.min():
-            return full
-        min_rows = self._min_rows_for_factors()
-        if min_rows <= 0:
+            # 组合宽表的索引是「所有标的日期的并集」：该票上市之前那些行，本来
+            # 就没有它的数据，缓存从上市日起就是完整的 —— 不能因此判成「前面缺、
+            # 整段重算」（2026-10-21 改）。之前这里只比 index.min()，导致除全场
+            # 最早上市那只票以外，**每一只票每次都被判成整段重算**，增量形同虚设。
+            # 真正的「缓存残缺」要看：该票明明有数据，缓存却没盖住那段。
+            probe = probe_col if (probe_col and probe_col in full.columns) else None
+            if probe is None:
+                return full
+            head = full.loc[full.index < cached.index.min(), probe]
+            if head.notna().any():
+                return full
+        win = window if isinstance(window, int) and window > 0 else 0
+        if win <= 0:
+            win = self._min_rows_for_factors()
+        if win <= 0:
             # 窗口完全靠猜（lambda + 没声明 warmup）⇒ 不敢只补尾巴，整段重算
             return full
-        margin = pd.offsets.BDay(min_rows * 2)
-        tail = full.loc[cached.index.max() - margin:].copy()
-        if len(tail) < min_rows:
+        # cached 末日在这张表里的行号；它之后的每一行才是真正要新算的
+        pos = int(full.index.searchsorted(cached.index.max(), side='right')) - 1
+        start = pos - win
+        if pos < 0 or start <= 0:
+            # 历史还不够一个窗口（或缓存末日对不上这张表），谈不上「只补尾巴」
             return full
-        return tail
+        return full.iloc[start:].copy()
+
+    @staticmethod
+    def _spec_window(spec) -> int:
+        """从因子定义里取窗口长度（最大的整数参数）；取不到返回 0。
+
+        口径与 `_min_rows_for_factors` 一致：跳过前导字符串（那些是列名），
+        剩下的整数里取最大。`('qka.alpha', 250, {'max_abs_return': 0.5})` → 250。
+        """
+        if not isinstance(spec, (list, tuple)):
+            return 0
+        rest = list(spec[1:])
+        idx = 0
+        while idx < len(rest) and isinstance(rest[idx], str):
+            idx += 1
+        win = 0
+        for v in rest[idx:]:
+            if isinstance(v, int) and v > win:
+                win = v
+        return win
 
     @staticmethod
     def _columns_by_symbol(columns):
@@ -1869,7 +1918,9 @@ class Data():
             for name in names:
                 spec, fp = plan[name]
                 cached = self._read_factor_cache(name, symbol, fp)
-                target = self._recompute_target(sub, cached)
+                target = self._recompute_target(
+                    sub, cached, self._spec_window(spec),
+                    probe_col='close' if 'close' in sub.columns else None)
                 if target is None:
                     sub[name] = cached.reindex(sub.index)
                     continue
@@ -1877,9 +1928,11 @@ class Data():
                 if target is sub:
                     series = sub[name]
                 else:
-                    # 补算的尾巴头部自带滚动预热 NaN，用缓存里的老值兜住，
-                    # 不能拿 NaN 去覆盖本来好好的值。
-                    series = target[name].reindex(sub.index).combine_first(
+                    # 只把缓存末日**之后**的行写回，历史值原样沿用缓存：后复权历史
+                    # 不会被将来的分红改写，早于缓存末日的因子值不可能变，重算它们
+                    # 纯属白烧 CPU；尾巴头部那些预热行同样不该覆盖老值。
+                    fresh = target[name][target.index > cached.index.max()]
+                    series = fresh.reindex(sub.index).combine_first(
                         cached.reindex(sub.index)
                     )
                     sub[name] = series
@@ -1933,7 +1986,10 @@ class Data():
                     collected[col] = view[col]
                     continue
                 cached = self._read_factor_cache(name, symbol, fp)
-                target = self._recompute_target(view, cached)
+                target = self._recompute_target(
+                    view, cached, self._spec_window(spec),
+                    probe_col=(f'{symbol}|close' if f'{symbol}|close' in view.columns
+                               else None))
                 if target is None:
                     collected[col] = cached.reindex(result.index)
                     continue
@@ -1942,8 +1998,9 @@ class Data():
                 if target is view:
                     series = view[col]
                 else:
-                    # 同上：补算尾巴头部的预热 NaN 用缓存老值兜住
-                    series = target[col].reindex(result.index).combine_first(
+                    # 同上：只写回缓存末日之后的行，历史值沿用缓存
+                    fresh = target[col][target.index > cached.index.max()]
+                    series = fresh.reindex(result.index).combine_first(
                         cached.reindex(result.index)
                     )
                 collected[col] = series
