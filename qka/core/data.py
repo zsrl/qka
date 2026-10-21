@@ -1495,6 +1495,21 @@ class Data():
             'last': str(s.index[-1].date()),
         }
 
+    def _factor_uses_rf(self, spec) -> bool:
+        """这个因子定义对应的指标是否吃 `rf`。
+
+        只有 α / 夏普吃。把无风险利率的摘要塞进所有因子的指纹会让改一次 rf
+        就作废全部 32 个因子（其中 24 个跟 rf 毫无关系），白白多算四倍。
+        """
+        if not isinstance(spec, (list, tuple)) or not spec:
+            return False
+        name = spec[0]
+        if not isinstance(name, str) or not _is_qka_factor(name):
+            return False
+        fn_name = name.split('.', 1)[1] if name.startswith('qka.') else name
+        fn = getattr(indicator, fn_name, None)
+        return fn is not None and _accepts_rf(fn)
+
     def _factor_signature(self, name, spec):
         """单个因子的配方指纹（定义 + 数据口径）；认不出返回 None。
 
@@ -1513,8 +1528,10 @@ class Data():
             'adjust': self.adjust,
             'fill_suspended': self.fill_suspended,
             'drop_head': self.drop_head,
-            # 无风险利率变了，α / 夏普的值就变了 —— 必须让指纹跟着变
-            'risk_free': self._risk_free_digest(),
+            # 无风险利率变了，α / 夏普的值就变了 —— 只对这两个系列的因子
+            # 让指纹跟着变，别把不相关的因子一起作废
+            'risk_free': (self._risk_free_digest()
+                          if self._factor_uses_rf(spec) else None),
         }, sort_keys=True, ensure_ascii=False)
         return hashlib.sha1(blob.encode('utf-8')).hexdigest()
 
