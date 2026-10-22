@@ -17,6 +17,105 @@ from statsmodels.tsa.filters.hp_filter import hpfilter
 from qka.core.analysis import _zigzag_core
 
 
+# ── 窗口参数：整数 = 行数，字符串 = 日历周期 ──────────────────────
+#   ('qka.alpha', 250)    → 往前数 250 根 K 线（老写法，行为完全不变）
+#   ('qka.alpha', '1Y')   → 过去一个日历年（约 243 个交易日，每年自动适配）
+#
+# 🚨 字符串**必须自己解析**，不能直接丢给 pandas：pandas 里小写 m 是「分钟」、
+# 大写 M 是「月末」，`'12m'` 会被理解成 12 分钟还静默算出一堆垃圾。
+# 规范写法大写（1Y / 3M / 20D），解析时大小写都认。
+_WINDOW_UNITS = {'Y': 365.0, 'M': 30.0, 'D': 1.0}
+
+# 一年按多少个交易日折算 —— 只用来定「窗口内至少要攒够几根 K 线」。
+# 实测（600519 全历史，365 天窗口内行数）：中位 243，最少 235，最多 250。
+# 门槛取 233（比最少的 235 再低一点）—— 取 240 的话，遇上节假日特别密的年份
+# 那几天会凑不满、因子留空，白丢数据。
+_TRADING_DAYS_PER_YEAR = 233
+
+# 真正折算「一个时间窗口里该有多少根 K 线」时用这个数（实际交易日的中位数）。
+# 🚨 跟上面的门槛不是一回事：门槛是「够不够算」，这个数是「要留多少行当预热」。
+# 用 233 去预热 10 年期会少 100 根样本，尾部算出来的值就是错的。
+_TRADING_DAYS_ACTUAL = 243
+
+
+def resolve_window(window):
+    """把窗口参数翻译成 (rolling 的窗口, 最小样本数)。
+
+    Args:
+        window: 整数（行数）或字符串（'1Y' / '3M' / '20D'，大小写都认）
+
+    Returns:
+        (win, min_periods)
+        - 整数：win 是 int，min_periods 等于它本身 —— 与旧行为逐位一致
+        - 字符串：win 是 pd.Timedelta，min_periods 是折合出来的交易日数
+
+    Raises:
+        ValueError: 写法认不出，或数值 <= 0
+    """
+    if isinstance(window, str):
+        text = window.strip().upper()
+        if not text:
+            raise ValueError('窗口参数不能为空字符串')
+        unit = text[-1]
+        if unit not in _WINDOW_UNITS:
+            raise ValueError(
+                f"认不出的窗口单位 {window!r}：只支持 Y（年）/ M（月）/ D（天），如 '1Y'、'3M'、'20D'"
+            )
+        try:
+            num = float(text[:-1])
+        except ValueError:
+            raise ValueError(f"认不出的窗口写法 {window!r}：应为「数字+单位」，如 '1Y'") from None
+        if num <= 0:
+            raise ValueError(f'窗口必须大于 0：{window!r}')
+        days = num * _WINDOW_UNITS[unit]
+        min_periods = max(1, int(round(days * _TRADING_DAYS_PER_YEAR / 365.0)))
+        return pd.Timedelta(days=days), min_periods
+
+    try:
+        win = int(window)
+    except (TypeError, ValueError):
+        raise ValueError(f'窗口参数只能是整数或字符串，收到 {window!r}') from None
+    if win <= 0:
+        raise ValueError(f'窗口必须大于 0：{window!r}')
+    return win, win
+
+
+def window_to_rows(window) -> int:
+    """这个窗口总共跨多少个交易日 —— 用来判断「数据够不够」和「预热要留多少行」。
+
+    - 整数：原样返回
+    - 字符串：按**实际交易日**折算（'1Y' → 243、'10Y' → 2430）。
+
+    🚨 这里用实际交易日（243/年）而不是 `min_periods`（240/年）：差的那 3 根在
+    10 年期会放大成 30 根，增量预热按 2400 行回溯的话，尾部算出来的值会比全量算的少
+    30 个样本 —— 结果不一致，而且不会报错。
+    """
+    win, _min_periods = resolve_window(window)
+    if isinstance(win, int):
+        return win
+    days = win / pd.Timedelta(days=1)
+    return int(np.ceil(days * _TRADING_DAYS_ACTUAL / 365.0))
+
+
+def _window_starts(index, window):
+    """算出「每个位置对应的窗口起点行号」，供手写循环的指标使用。
+
+    Returns:
+        (starts, min_periods)：starts[i] 是第 i 行的窗口起始行号；
+        窗口还不够长时给 -1，调用方跳过即可。
+    """
+    n = len(index)
+    if isinstance(window, str):
+        win, min_periods = resolve_window(window)
+        left = index - win                      # DatetimeIndex - Timedelta
+        starts = np.asarray(index.searchsorted(left, side='left'), dtype=np.int64)
+        return starts, min_periods
+    w = int(window)
+    starts = np.arange(n, dtype=np.int64) - w + 1
+    starts[starts < 0] = -1
+    return starts, w
+
+
 def alpha(df: pd.DataFrame, symbol: str, window: int,
           rf: float | pd.Series = 0.0, periods_per_year: int = 252) -> pd.Series:
     """滚动詹森 α（年化）。
@@ -27,7 +126,8 @@ def alpha(df: pd.DataFrame, symbol: str, window: int,
     Args:
         df: 含 {symbol}|returns 和 benchmark|returns 列的 DataFrame
         symbol: 股票代码
-        window: 滚动窗口（交易日数）
+        window: 滚动窗口。整数 = 交易日数（往前数多少根）；
+            字符串 = 日历周期，如 '1Y'（一个日历年）/ '3M' / '20D'，大小写都认
         rf: 无风险利率（**年化**，小数）。两种写法：
             - 标量：全程同一个数，如 0.02
             - 序列（带日期索引）：**取该窗口内的平均值**，见 _rf_window_mean
@@ -42,10 +142,11 @@ def alpha(df: pd.DataFrame, symbol: str, window: int,
     """
     returns = df[f'{symbol}|returns']
     bench = _get_benchmark(df)
-    rp = returns.rolling(window).mean() * periods_per_year
-    rm = bench.rolling(window).mean() * periods_per_year
-    cov = returns.rolling(window).cov(bench)
-    var = bench.rolling(window).var()
+    win, mp = resolve_window(window)
+    rp = returns.rolling(win, min_periods=mp).mean() * periods_per_year
+    rm = bench.rolling(win, min_periods=mp).mean() * periods_per_year
+    cov = returns.rolling(win, min_periods=mp).cov(bench)
+    var = bench.rolling(win, min_periods=mp).var()
     beta_series = cov / var
     rf = _rf_window_mean(rf, df.index, window)
     return rp - (rf + beta_series * (rm - rf))
@@ -59,15 +160,17 @@ def beta(df: pd.DataFrame, symbol: str, window: int) -> pd.Series:
     Args:
         df: 含 {symbol}|returns 和 benchmark|returns 列的 DataFrame
         symbol: 股票代码
-        window: 滚动窗口（交易日数）
+        window: 滚动窗口。整数 = 交易日数（往前数多少根）；
+            字符串 = 日历周期，如 '1Y'（一个日历年）/ '3M' / '20D'，大小写都认
 
     Returns:
         pd.Series: 滚动 β 值
     """
     returns = df[f'{symbol}|returns']
     bench = _get_benchmark(df)
-    cov = returns.rolling(window).cov(bench)
-    var = bench.rolling(window).var()
+    win, mp = resolve_window(window)
+    cov = returns.rolling(win, min_periods=mp).cov(bench)
+    var = bench.rolling(win, min_periods=mp).var()
     return cov / var
 
 
@@ -81,7 +184,8 @@ def sharpe(df: pd.DataFrame, symbol: str, window: int,
     Args:
         df: 含 {symbol}|returns 列的 DataFrame
         symbol: 股票代码
-        window: 滚动窗口（交易日数）
+        window: 滚动窗口。整数 = 交易日数（往前数多少根）；
+            字符串 = 日历周期，如 '1Y'（一个日历年）/ '3M' / '20D'，大小写都认
         rf: 无风险利率（**年化**，小数）。标量 = 全程一个数；
             序列 = 取该窗口内的平均值（见 _rf_window_mean）
         periods_per_year: 每年交易日数，默认 252
@@ -90,8 +194,9 @@ def sharpe(df: pd.DataFrame, symbol: str, window: int,
         pd.Series: 滚动夏普比率
     """
     returns = df[f'{symbol}|returns']
-    rp = returns.rolling(window).mean() * periods_per_year
-    vol = returns.rolling(window).std() * np.sqrt(periods_per_year)
+    win, mp = resolve_window(window)
+    rp = returns.rolling(win, min_periods=mp).mean() * periods_per_year
+    vol = returns.rolling(win, min_periods=mp).std() * np.sqrt(periods_per_year)
     rf = _rf_window_mean(rf, df.index, window)
     return (rp - rf) / vol
 
@@ -104,7 +209,8 @@ def max_drawdown(df: pd.DataFrame, symbol: str, window: int) -> pd.Series:
     Args:
         df: 含 {symbol}|returns 列的 DataFrame
         symbol: 股票代码
-        window: 滚动窗口（交易日数）
+        window: 滚动窗口。整数 = 交易日数（往前数多少根）；
+            字符串 = 日历周期，如 '1Y'（一个日历年）/ '3M' / '20D'，大小写都认
 
     Returns:
         pd.Series: 滚动最大回撤（负数）
@@ -113,8 +219,13 @@ def max_drawdown(df: pd.DataFrame, symbol: str, window: int) -> pd.Series:
     cum = (1 + returns).cumprod()
     cum_values = cum.values
     result = np.full(len(cum_values), np.nan)
-    for i in range(window - 1, len(cum_values)):
-        seg = cum_values[i - window + 1 : i + 1]
+    # 窗口起点按参数类型算：整数按行数、字符串按日历回溯（见 _window_starts）
+    starts, min_periods = _window_starts(cum.index, window)
+    for i in range(len(cum_values)):
+        s = starts[i]
+        if s < 0 or (i - s + 1) < min_periods:
+            continue
+        seg = cum_values[s : i + 1]
         # 窗口内逐日刷新峰值，再取「任意时刻从峰到谷」最深的那一次。
         # 旧实现只算 (末值 - 窗口峰值) / 窗口峰值 —— 那是「当前回撤」（现在离最高点多远），
         # 会漏掉中间已经发生过的深坑：净值 1 → 1.2 → 0.6 → 1.3，旧算法给 0，
@@ -133,7 +244,8 @@ def information_ratio(df: pd.DataFrame, symbol: str, window: int,
     Args:
         df: 含 {symbol}|returns 和 benchmark|returns 列的 DataFrame
         symbol: 股票代码
-        window: 滚动窗口（交易日数）
+        window: 滚动窗口。整数 = 交易日数（往前数多少根）；
+            字符串 = 日历周期，如 '1Y'（一个日历年）/ '3M' / '20D'，大小写都认
         periods_per_year: 每年交易日数，默认 252
 
     Returns:
@@ -142,8 +254,9 @@ def information_ratio(df: pd.DataFrame, symbol: str, window: int,
     returns = df[f'{symbol}|returns']
     bench = _get_benchmark(df)
     excess = returns - bench
-    mean_excess = excess.rolling(window).mean() * periods_per_year
-    vol_excess = excess.rolling(window).std() * np.sqrt(periods_per_year)
+    win, mp = resolve_window(window)
+    mean_excess = excess.rolling(win, min_periods=mp).mean() * periods_per_year
+    vol_excess = excess.rolling(win, min_periods=mp).std() * np.sqrt(periods_per_year)
     return mean_excess / vol_excess
 
 
@@ -157,7 +270,8 @@ def rolling_zigzag(df: pd.DataFrame, symbol: str, window: int,
     Args:
         df: 含 {symbol}|close 列的 DataFrame
         symbol: 股票代码
-        window: 滚动窗口（交易日数），至少 10
+        window: 滚动窗口。整数 = 交易日数（往前数多少根）；
+            字符串 = 日历周期，如 '1Y'（一个日历年）/ '3M' / '20D'，大小写都认，至少 10
         threshold: 反转阈值，默认 0.3。峰顶回落 30% 确认顶
         lamb: HP 滤波平滑参数，默认 1600（日线数据标准值）
 
@@ -173,11 +287,14 @@ def rolling_zigzag(df: pd.DataFrame, symbol: str, window: int,
     idx = close.index
     result = np.full(len(values), np.nan)
 
-    if len(values) < window or window < 10:
+    starts, min_periods = _window_starts(idx, window)
+    if len(values) < min_periods or min_periods < 10:
         return pd.Series(result, index=idx)
 
-    for i in range(window - 1, len(values)):
-        win_start = i - window + 1
+    for i in range(len(values)):
+        win_start = starts[i]
+        if win_start < 0 or (i - win_start + 1) < min_periods:
+            continue
         win_vals = values[win_start : i + 1]
         win_idx = idx[win_start : i + 1]
 
@@ -237,7 +354,8 @@ def _rf_window_mean(rf, index, window: int):
     if index is not None and len(s) and isinstance(index, pd.DatetimeIndex):
         s = s.reindex(s.index.union(index)).ffill().reindex(index)
 
-    return s.rolling(window, min_periods=window).mean()
+    win, min_periods = resolve_window(window)
+    return s.rolling(win, min_periods=min_periods).mean()
 
 
 def _get_benchmark(df: pd.DataFrame) -> pd.Series:
