@@ -1375,8 +1375,8 @@ class Data():
     def _min_rows_for_factors(self):
         """计算所有因子所需的最小行数（含显式预热天数）。
 
-        遍历所有因子条目的整数参数，取最大值作为窗口上限的保守估计，
-        再与显式 warmup 取较大者。
+        遍历所有因子条目的窗口参数（整数按交易日数、'1Y' 这类按日历折算成行数），
+        取最大值作为窗口上限的保守估计，再与显式 warmup 取较大者。
         """
         if not self._factors or not isinstance(self._factors, dict):
             return self.warmup
@@ -1384,14 +1384,16 @@ class Data():
         for spec in self._factors.values():
             if callable(spec) or not isinstance(spec, (list, tuple)):
                 continue
-            # spec[1:] 中跳过所有前导字符串（列名），收集剩余整数
-            rest = list(spec[1:])
-            idx = 0
-            while idx < len(rest) and isinstance(rest[idx], str):
-                idx += 1
-            for v in rest[idx:]:
+            # 窗口可能是整数（交易日数），也可能是 '1Y' / '3M' / '20D' 这样的日历写法。
+            # 字符串要按交易日折算成行数，否则「数据够不够算」的门槛会漏掉它。
+            for v in list(spec[1:]):
                 if isinstance(v, int):
                     max_window = max(max_window, v)
+                elif isinstance(v, str) and v.strip() and v.strip()[-1].upper() in 'YMD':
+                    try:
+                        max_window = max(max_window, indicator.window_to_rows(v))
+                    except ValueError:
+                        pass          # 不是窗口写法（如列名 'close_d'），忽略
         return max(max_window, self.warmup)
 
     # ── 因子缓存 ────────────────────────────────────────────────
@@ -1767,21 +1769,22 @@ class Data():
 
     @staticmethod
     def _spec_window(spec) -> int:
-        """从因子定义里取窗口长度（最大的整数参数）；取不到返回 0。
+        """从因子定义里取窗口，**统一换算成行数**；取不到返回 0。
 
-        口径与 `_min_rows_for_factors` 一致：跳过前导字符串（那些是列名），
-        剩下的整数里取最大。`('qka.alpha', 250, {'max_abs_return': 0.5})` → 250。
+        整数原样；字符串（'1Y' / '3M' / '20D'）按交易日折算 —— 见
+        `indicator.window_to_rows`。增量预热要用它算「往回留多少行」。
         """
         if not isinstance(spec, (list, tuple)):
             return 0
-        rest = list(spec[1:])
-        idx = 0
-        while idx < len(rest) and isinstance(rest[idx], str):
-            idx += 1
         win = 0
-        for v in rest[idx:]:
-            if isinstance(v, int) and v > win:
-                win = v
+        for v in list(spec[1:]):
+            if isinstance(v, int):
+                win = max(win, v)
+            elif isinstance(v, str) and v.strip() and v.strip()[-1].upper() in 'YMD':
+                try:
+                    win = max(win, indicator.window_to_rows(v))
+                except ValueError:
+                    pass          # 不是窗口写法（如列名），忽略
         return win
 
     @staticmethod
