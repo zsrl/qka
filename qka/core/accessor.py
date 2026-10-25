@@ -34,6 +34,10 @@ class DataAccessor:
         )
         self._dates: deque = deque(maxlen=max_window)
         self._last_date = None  # 避免同一 bar 内多次 push 重复记录日期
+        # 同一根 bar 内 get() 的结果是不变的，缓存起来复用。
+        # 实测一次回测里 get 被调 28953 次（平均每根 bar 17 次），每次都重建
+        # 451 项 dict + Series，累计 15 秒。缓存后每根 bar 每个因子只建一次。
+        self._cache: dict[str, pd.Series] = {}
 
     def push(self, date, factor: str, data: dict):
         """
@@ -48,6 +52,9 @@ class DataAccessor:
         if date != self._last_date:
             self._dates.append(date)
             self._last_date = date
+            self._cache.clear()          # 换 bar：上一根 bar 的横截面全失效
+        else:
+            self._cache.pop(factor, None)  # 同一 bar 内同因子被重推，旧值作废
         for symbol, value in data.items():
             self._buffer[factor][symbol].append(value)
 
@@ -60,9 +67,16 @@ class DataAccessor:
 
         Returns:
             pd.Series，index=股票代码，values=最新值
+
+        注意：返回值是同一根 bar 内共享的缓存对象，**只读**，不要原地修改。
         """
+        cached = self._cache.get(factor)
+        if cached is not None:
+            return cached
         data = {sym: vals[-1] for sym, vals in self._buffer.get(factor, {}).items()}
-        return pd.Series(data)
+        series = pd.Series(data)
+        self._cache[factor] = series
+        return series
 
     def history(self, factor: str, window: int = 20) -> pd.DataFrame:
         """
@@ -88,3 +102,4 @@ class DataAccessor:
         self._buffer.clear()
         self._dates.clear()
         self._last_date = None
+        self._cache.clear()

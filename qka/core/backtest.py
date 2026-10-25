@@ -81,6 +81,42 @@ class Backtest:
             by_factor[factor][symbol] = val
         return dict(by_factor)
 
+    @staticmethod
+    def _build_layout(columns):
+        """列名 → {factor: [(symbol, 列号)]}，**整段回测只解析一次**。
+
+        列名格式 `{symbol}|{factor}`，所有 bar 共用同一套列。原来每根 bar 都
+        `rsplit` 一遍全部列名：451 只 × 8 字段 × 1646 天 = 594 万次字符串切分，
+        纯属重复劳动（实测 `_parse_row` 累计 19 秒）。
+        """
+        layout: dict[str, list[tuple[str, int]]] = defaultdict(list)
+        for i, col in enumerate(columns):
+            if not isinstance(col, str) or '|' not in col:
+                continue
+            sym, _, factor = col.rpartition('|')
+            layout[factor].append((sym, i))
+        return dict(layout)
+
+    def _run_bars(self, dates, values, layout):
+        """逐 bar 驱动：推数据 → 策略决策 → broker 撮合。
+
+        values 是 (days × cols) 的 numpy 数组，按位置取值。比 `df.iterrows()`
+        快一个量级 —— iterrows 每行都要构造一个 Series 并做 dtype 推断
+        （实测这两项合计 20 秒以上）。
+        """
+        data_acc = self.strategy._data
+        broker = self.strategy.broker
+        push = data_acc.push
+        on_bar = self.strategy.on_bar
+
+        for i, date in enumerate(dates):
+            row = values[i]
+            for factor, entries in layout.items():
+                push(date, factor, {sym: row[ci] for sym, ci in entries})
+            broker.timestamp = date
+            on_bar(date)
+            broker.on_bar(date, data_acc.get)
+
     def run(self, cash: float = 100000.0,
             start_date: str = None, end_date: str = None,
             benchmark: Optional[str] = None,
@@ -130,54 +166,37 @@ class Backtest:
             self._load_benchmark(benchmark)
 
         if isinstance(raw, dd.DataFrame):
-            # ── dask 模式：分区迭代 ──
+            # ── dask 模式 ──
             ddf: dd.DataFrame = raw
             n_rows = len(ddf)
 
-            if n_rows > 500:
-                # 大规模：先算 index，再按日期分块读取
-                index = ddf.index.compute()
-                chunk_size = 500
+            # 分块是为了控制内存，**不是越小越好**：原来写死每块 500 行，
+            # 451 只票 × 1646 天被切成 4 块，dask 反复建图、反复读 parquet 元数据
+            # （实测 dask.tokenize 被调 50 万次、累计 10 秒）。按 ~200MB 预算反推行数。
+            _cols = max(1, len(ddf.columns))
+            chunk_size = max(500, int(200 * 1024 * 1024 / (_cols * 8)))
 
+            if n_rows <= chunk_size:
+                # 一次装得下：直接 compute。**不要**再走 `ddf.loc[首:尾].compute()` ——
+                # 单块时那等于多套一层 dask 图，实测白白多花 25 秒。
+                df = ddf.compute()
+                self._run_bars(df.index, df.to_numpy(), self._build_layout(df.columns))
+            else:
+                index = ddf.index.compute()
+                layout = None
                 for start in range(0, n_rows, chunk_size):
                     end = min(start + chunk_size, n_rows)
                     date_start, date_end = index[start], index[end - 1]
 
                     chunk = ddf.loc[date_start:date_end].compute()
-                    for dt, row in chunk.iterrows():
-                        by_factor = self._parse_row(row)
-                        for factor, data in by_factor.items():
-                            self.strategy._data.push(dt, factor, data)
-                        # dask 路径：策略使用 self.get() / self.history()
-                        self.strategy.broker.timestamp = dt
-                        self.strategy.on_bar(dt)
-                        self.strategy.broker.on_bar(
-                            dt, self.strategy._data.get
-                        )
-            else:
-                # 小规模：一次加载，零开销
-                df = ddf.compute()
-                for date, row in df.iterrows():
-                    by_factor = self._parse_row(row)
-                    for factor, data in by_factor.items():
-                        self.strategy._data.push(date, factor, data)
-                    self.strategy.broker.timestamp = date
-                    self.strategy.on_bar(date)
-                    self.strategy.broker.on_bar(
-                        date, self.strategy._data.get
-                    )
+                    # 列布局整段只算一次：所有分块的列完全一致
+                    if layout is None:
+                        layout = self._build_layout(chunk.columns)
+                    self._run_bars(chunk.index, chunk.to_numpy(), layout)
         else:
             # ── pandas 模式：向后兼容（测试 mock 数据等） ──
             df: pd.DataFrame = raw
-            for date, row in df.iterrows():
-                by_factor = self._parse_row(row)
-                for factor, data in by_factor.items():
-                    self.strategy._data.push(date, factor, data)
-                self.strategy.broker.timestamp = date
-                self.strategy.on_bar(date)
-                self.strategy.broker.on_bar(
-                    date, self.strategy._data.get
-                )
+            self._run_bars(df.index, df.to_numpy(), self._build_layout(df.columns))
 
         # 保存回测结果
         self.results = self.strategy.broker.trades
