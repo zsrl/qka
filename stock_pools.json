@@ -1,0 +1,394 @@
+{
+  "categories": [
+    {
+      "id": "tech",
+      "name": "科技",
+      "description": "聚焦人工智能算力、算法、数据、通信、计算机、先进制造与设备",
+      "children": [
+        {
+          "id": "optical_comm",
+          "name": "光通信",
+          "description": "800G/1.6T高速光模块、光器件、CPO"
+        },
+        {
+          "id": "storage",
+          "name": "存储",
+          "description": "DRAM/NAND、HBM高带宽存储、存储主控芯片"
+        },
+        {
+          "id": "domestic_compute",
+          "name": "国产算力",
+          "description": "AI服务器、GPU/NPU芯片、算力中心调度"
+        },
+        {
+          "id": "power_ai",
+          "name": "电力（AI基建/燃机/发电机/储能）",
+          "description": "AI基建电力支撑、燃气轮机、发电机、电网设备、新型储能"
+        },
+        {
+          "id": "new_materials",
+          "name": "新材料",
+          "description": "半导体高阶材料、电子化学品、关键合金材料"
+        },
+        {
+          "id": "semiconductor_equip",
+          "name": "半导体设备",
+          "description": "算力细分方向设备、光刻/刻蚀/薄膜沉积设备、光模块精密设备"
+        }
+      ]
+    },
+    {
+      "id": "consumption",
+      "name": "消费",
+      "description": "做减法：必选消费只选创新药，可选消费只选新消费",
+      "children": [
+        {
+          "id": "innovative_drugs",
+          "name": "创新药",
+          "description": "创新药靶点研发、出海CXO、ADC与生物技术"
+        },
+        {
+          "id": "new_consumption",
+          "name": "新消费",
+          "description": "高景气潮流新消费、国货美妆、潮玩出海"
+        }
+      ]
+    },
+    {
+      "id": "cyclical",
+      "name": "周期",
+      "description": "做减法：只选能源金属与战略金属、锂电与储能周期复苏",
+      "children": [
+        {
+          "id": "energy_metals",
+          "name": "能源金属",
+          "description": "锂、钴、镍等电池关键能源金属"
+        },
+        {
+          "id": "strategic_metals",
+          "name": "战略金属",
+          "description": "铜、钼、钨、稀土等稀缺战略储备金属"
+        },
+        {
+          "id": "battery_recovery",
+          "name": "锂电储能复苏",
+          "description": "锂电池龙头、固态电池、储能逆变器与集成系统"
+        }
+      ]
+    },
+    {
+      "id": "finance",
+      "name": "大金融",
+      "description": "高股息稳健底仓与资本市场核心枢纽",
+      "children": [
+        {
+          "id": "bank_high_dividend",
+          "name": "核心银行",
+          "description": "头部商业银行、高股息红利标的"
+        },
+        {
+          "id": "insurance_broker",
+          "name": "保险证券",
+          "description": "大型综合保险资产、头部券商"
+        }
+      ]
+    }
+  ],
+  "stocks": [
+    {
+      "symbol": "002463.SZ",
+      "name": "沪电股份",
+      "pool_level": "basic",
+      "categories": [
+        "科技",
+        "算力配套"
+      ],
+      "reason": "高多层PCB与HDI领跑者，高速交换机与AI服务器板核心主力",
+      "reports": [
+        "【天风通信】AI硬件景气上行，重点推荐工业富联(601138)与沪电股份(002463)，以及寒武纪(688256)。",
+        "【天风证券AI硬件研报】算力底座持续景气，工业富联(601138)AI服务器份额爆发，沪电股份(002463)高阶PCB需求强劲。"
+      ],
+      "risk_notes": "",
+      "price": 0.0,
+      "change_pct": 0.0,
+      "change_3d": 0.0,
+      "updated_at": "2026-10-27"
+    },
+    {
+      "symbol": "601138.SH",
+      "name": "工业富联",
+      "pool_level": "basic",
+      "categories": [
+        "科技",
+        "国产算力"
+      ],
+      "reason": "全球AI服务器制造巨头，深度绑定海外头部云厂商，高端算力机柜与液冷协同交付",
+      "reports": [
+        "【天风通信】AI硬件景气上行，重点推荐工业富联(601138)与沪电股份(002463)，以及寒武纪(688256)。",
+        "【天风证券AI硬件研报】算力底座持续景气，工业富联(601138)AI服务器份额爆发，沪电股份(002463)高阶PCB需求强劲。"
+      ],
+      "risk_notes": "",
+      "price": 0.0,
+      "change_pct": 0.0,
+      "change_3d": 0.0,
+      "updated_at": "2026-10-27"
+    },
+    {
+      "symbol": "300308.SZ",
+      "name": "中际旭创",
+      "pool_level": "trading",
+      "categories": [
+        "科技",
+        "光通信"
+      ],
+      "reason": "全球高速光模块领头羊，800G/1.6T需求确定性强，海外顶级算力云客户核心供应商。",
+      "reports": [
+        "【中金公司算力研报】推荐寒武纪(688256)与中际旭创(300308)。",
+        "中信建投-光通信行业深度：全球AI算力集群驱动1.6T放量",
+        "2024Q3业绩预增突破历史新高"
+      ],
+      "risk_notes": "单日涨幅偏离过大时注意分步止盈，控制回撤。",
+      "price": 162.8,
+      "change_pct": 3.82,
+      "change_3d": 8.45,
+      "updated_at": "2026-10-27"
+    },
+    {
+      "symbol": "300502.SZ",
+      "name": "新易盛",
+      "pool_level": "trading",
+      "categories": [
+        "科技",
+        "光通信"
+      ],
+      "reason": "LPO与硅光技术领先，800G交付份额提升，海外云厂商订单饱满。",
+      "reports": [
+        "广发证券-新易盛：高速率产品放量加速，海外突破显著"
+      ],
+      "risk_notes": "警惕短期连续3日冲高后的技术性缩量震荡。",
+      "price": 128.5,
+      "change_pct": 4.15,
+      "change_3d": 7.8,
+      "updated_at": "2026-10-27"
+    },
+    {
+      "symbol": "300394.SZ",
+      "name": "天孚通信",
+      "pool_level": "selected",
+      "categories": [
+        "科技",
+        "光通信"
+      ],
+      "reason": "光器件平台型龙头，光引擎技术壁垒极高，配套北美AI算力芯片出货。",
+      "reports": [
+        "天风证券-天孚通信：光引擎关键枢纽，平台壁垒深厚"
+      ],
+      "risk_notes": "",
+      "price": 115.6,
+      "change_pct": 1.25,
+      "change_3d": 3.4,
+      "updated_at": "2026-10-27"
+    },
+    {
+      "symbol": "603986.SH",
+      "name": "兆易创新",
+      "pool_level": "selected",
+      "categories": [
+        "科技",
+        "存储"
+      ],
+      "reason": "国内利基型存储与MCU龙头，端侧AI兴起带动Nor Flash量价齐升。",
+      "reports": [
+        "国泰君安-兆易创新：存储周期反转叠加AI MCU驱动"
+      ],
+      "risk_notes": "周期触底回升阶段，适合看长做短、大跌分步低吸。",
+      "price": 98.2,
+      "change_pct": 2.1,
+      "change_3d": -1.2,
+      "updated_at": "2026-10-27"
+    },
+    {
+      "symbol": "688256.SH",
+      "name": "寒武纪",
+      "pool_level": "trading",
+      "categories": [
+        "科技",
+        "国产算力"
+      ],
+      "reason": "自主可控AI芯片先锋，思元系列生态快速成型，国内大模型训练与推理核心卡。",
+      "reports": [
+        "【中金公司算力研报】推荐寒武纪(688256)与中际旭创(300308)。",
+        "【天风通信】AI硬件景气上行，重点推荐工业富联(601138)与沪电股份(002463)，以及寒武纪(688256)。",
+        "华泰证券-寒武纪：国产算力中流砥柱，生态与商业化突破"
+      ],
+      "risk_notes": "估值弹性高，大涨必须分步止盈，切忌追高。",
+      "price": 380.0,
+      "change_pct": 6.8,
+      "change_3d": 14.5,
+      "updated_at": "2026-10-27"
+    },
+    {
+      "symbol": "603019.SH",
+      "name": "中科曙光",
+      "pool_level": "basic",
+      "categories": [
+        "科技",
+        "国产算力"
+      ],
+      "reason": "超算与AI智算中心总包龙头，海光信息大股东，全国算力一张网战略受益。",
+      "reports": [
+        "招商证券-中科曙光：智算一体化与核心参股价值重估"
+      ],
+      "risk_notes": "",
+      "price": 62.4,
+      "change_pct": -0.8,
+      "change_3d": 2.3,
+      "updated_at": "2026-10-27"
+    },
+    {
+      "symbol": "300750.SZ",
+      "name": "宁德时代",
+      "pool_level": "trading",
+      "categories": [
+        "科技",
+        "电力（AI基建/燃机/发电机/储能）"
+      ],
+      "reason": "锂电全球无可撼动霸王，三季度起储能与海外出货量价齐升，周期反转龙头。",
+      "reports": [
+        "中金公司-宁德时代：储能超级周期降临，盈利中枢超预期"
+      ],
+      "risk_notes": "大市值白马，顺应趋势底仓持有，分步波段止盈。",
+      "price": 258.9,
+      "change_pct": 3.12,
+      "change_3d": 6.7,
+      "updated_at": "2026-10-27"
+    },
+    {
+      "symbol": "300274.SZ",
+      "name": "阳光电源",
+      "pool_level": "selected",
+      "categories": [
+        "科技",
+        "电力（AI基建/燃机/发电机/储能）"
+      ],
+      "reason": "大储与光伏逆变器全球领先，欧美AI数据中心独立储能电站核心设备商。",
+      "reports": [
+        "海通证券-阳光电源：全球大储爆发，海外高溢价订单饱满"
+      ],
+      "risk_notes": "",
+      "price": 89.4,
+      "change_pct": 1.85,
+      "change_3d": 4.1,
+      "updated_at": "2026-10-27"
+    },
+    {
+      "symbol": "600875.SH",
+      "name": "东方电气",
+      "pool_level": "basic",
+      "categories": [
+        "科技",
+        "电力（AI基建/燃机/发电机/储能）"
+      ],
+      "reason": "自主燃气轮机、核电机组、水电发电机核心国家队，AI算力电网支撑底座。",
+      "reports": [
+        "申万宏源-东方电气：重型燃机与清洁电力装备迎来大繁荣"
+      ],
+      "risk_notes": "",
+      "price": 18.25,
+      "change_pct": 0.45,
+      "change_3d": 1.1,
+      "updated_at": "2026-10-27"
+    },
+    {
+      "symbol": "002371.SZ",
+      "name": "北方华创",
+      "pool_level": "selected",
+      "categories": [
+        "科技",
+        "半导体设备"
+      ],
+      "reason": "全品类半导体设备平台龙头，刻蚀、薄膜、热处理全面切入先进制程。",
+      "reports": [
+        "民生证券-北方华创：平台型旗舰，国产替代攻坚核心标的"
+      ],
+      "risk_notes": "",
+      "price": 395.0,
+      "change_pct": 2.45,
+      "change_3d": 5.2,
+      "updated_at": "2026-10-27"
+    },
+    {
+      "symbol": "600276.SH",
+      "name": "恒瑞医药",
+      "pool_level": "selected",
+      "categories": [
+        "消费",
+        "创新药"
+      ],
+      "reason": "国内创新药一哥，多款大单品ADC海外重磅License-out，创新药做减法必选。",
+      "reports": [
+        "兴业证券-恒瑞医药：创新转型进入收获期，海外授权空间巨大"
+      ],
+      "risk_notes": "",
+      "price": 48.6,
+      "change_pct": 1.15,
+      "change_3d": -0.8,
+      "updated_at": "2026-10-27"
+    },
+    {
+      "symbol": "603993.SH",
+      "name": "洛阳钼业",
+      "pool_level": "trading",
+      "categories": [
+        "周期",
+        "战略金属"
+      ],
+      "reason": "全球战略铜、钴龙头，刚果金TFM/KFM铜矿扩产爆发，AI电力电网铜需求长期向上。",
+      "reports": [
+        "华宝证券-洛阳钼业：量价齐升，全球顶尖铜矿巨头扬帆"
+      ],
+      "risk_notes": "受国际大宗商品价格波动影响，急涨适度止盈。",
+      "price": 8.75,
+      "change_pct": 2.8,
+      "change_3d": 6.1,
+      "updated_at": "2026-10-27"
+    },
+    {
+      "symbol": "601899.SH",
+      "name": "紫金矿业",
+      "pool_level": "selected",
+      "categories": [
+        "周期",
+        "战略金属"
+      ],
+      "reason": "金铜双轮驱动，全球矿山并购整合能力一流，长期战略金属压舱石。",
+      "reports": [
+        "光大证券-紫金矿业：全球矿业巨擘，金铜并进"
+      ],
+      "risk_notes": "",
+      "price": 17.5,
+      "change_pct": 1.3,
+      "change_3d": 3.2,
+      "updated_at": "2026-10-27"
+    },
+    {
+      "symbol": "600036.SH",
+      "name": "招商银行",
+      "pool_level": "basic",
+      "categories": [
+        "大金融",
+        "核心银行"
+      ],
+      "reason": "零售之王，高股息资产，资产质量与拨备覆盖率扎实，震荡市防御压舱石。",
+      "reports": [
+        "平安证券-招商银行：零售资产重塑韧性，股息率具备坚挺吸引力"
+      ],
+      "risk_notes": "",
+      "price": 38.2,
+      "change_pct": 0.52,
+      "change_3d": 0.9,
+      "updated_at": "2026-10-27"
+    }
+  ],
+  "last_updated": "2026-10-27 18:44:01"
+}

@@ -19,6 +19,7 @@ export default defineConfig({
     logo: '/logo.svg',
     nav: [
       { text: '首页', link: '/' },
+      { text: '🖥️ Web 控制台', link: '/guide/console' },
       { text: '使用指南', link: '/guide/intro' },
       {
         text: '核心功能',
@@ -44,6 +45,7 @@ export default defineConfig({
           items: [
             { text: '项目简介', link: '/guide/intro' },
             { text: '快速上手', link: '/guide/quick-start' },
+            { text: '🖥️ Web 控制台', link: '/guide/console' },
             { text: '架构设计', link: '/guide/architecture' }
           ]
         },

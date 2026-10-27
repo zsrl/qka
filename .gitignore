@@ -191,3 +191,9 @@ _commit.ps1
 website/node_modules/
 website/.vitepress/dist/
 website/.vitepress/cache/
+
+# SQLite WAL and shared memory files
+*.db-wal
+*.db-shm
+*.sqlite3-wal
+*.sqlite3-shm

@@ -13,6 +13,9 @@ hero:
       text: 快速上手
       link: /guide/quick-start
     - theme: alt
+      text: 🖥️ Web 控制台
+      link: /guide/console
+    - theme: alt
       text: 核心功能
       link: /guide/intro
     - theme: alt
@@ -23,6 +26,9 @@ hero:
       link: /guide/agent-skill
 
 features:
+  - icon: 🖥️
+    title: 现代 Web 可视化控制台
+    details: 内置轻量响应式 Web 控制台，支持行情 K 线交互探索、预置策略库、一键回测大屏、模拟标的合成与参数调试。
   - icon: ⚡
     title: 极简优雅的 API
     details: 面向对象的直观设计，几行代码搞定数据加载、指标计算、策略买卖与绩效评估，告别繁重框架样板代码。
@@ -59,6 +65,15 @@ features:
 </div>
 
 ::: code-group
+
+```bash [Web 控制台一键启动（推荐）]
+# 1. 一键启动 Web 可视化控制台（自动打开 http://127.0.0.1:15002）
+./start.sh          # macOS / Linux
+start.bat           # Windows（支持直接双击运行）
+
+# 2. 或使用命令行工具启动
+qka console --port 15002
+```
 
 ```python [双均线策略 (MaCross.py)]
 from qka import Data, Strategy, Backtest

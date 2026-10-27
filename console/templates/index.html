@@ -1,0 +1,1054 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QKA 控制台 — 量化投研与策略回测工作台</title>
+  <link rel="icon" type="image/svg+xml" href="/static/img/logo.svg">
+  <link rel="stylesheet" href="/static/css/console.css">
+  <!-- ECharts 5 现代金融图表库 -->
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+</head>
+<body>
+
+  <!-- 全局非阻塞 Toast 消息容器 -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <div class="app-container">
+
+    <!-- 左侧垂直导航菜单 (Left Sidebar) -->
+    <aside class="app-sidebar">
+      <div class="brand-section">
+        <img src="/static/img/logo.svg" alt="QKA Logo" class="brand-logo">
+        <div class="brand-title">QKA 快量化</div>
+        <div class="brand-badge">PRO</div>
+      </div>
+
+      <ul class="nav-menu">
+        <li class="nav-section-title" style="padding-top: 4px;">核心工作台</li>
+        <li class="nav-item active" data-tab="tab-overview" data-route="/overview">
+          <div class="nav-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
+          </div>
+          <span>总览大屏</span>
+          <span class="nav-shortcut">1</span>
+        </li>
+        <li class="nav-item" data-tab="tab-pool" data-route="/pool">
+          <div class="nav-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+          </div>
+          <span>股票池</span>
+          <span class="nav-badge-count" id="nav-pool-badge" title="交易股票池标的数">5</span>
+        </li>
+        <li class="nav-item" data-tab="tab-strategy" data-route="/strategy">
+          <div class="nav-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+          </div>
+          <span>策略回测</span>
+          <span class="nav-shortcut">3</span>
+        </li>
+        <li class="nav-item" data-tab="tab-market" data-route="/market">
+          <div class="nav-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+          </div>
+          <span>行情探索</span>
+          <span class="nav-shortcut">4</span>
+        </li>
+        <li class="nav-item" data-tab="tab-simulate" data-route="/simulate">
+          <div class="nav-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h4l3-9 6 18 3-9h4"/></svg>
+          </div>
+          <span>模拟行情</span>
+          <span class="nav-shortcut">5</span>
+        </li>
+        <li class="nav-item" data-tab="tab-ai" data-route="/ai">
+          <div class="nav-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4z"/><rect x="4" y="12" width="16" height="8" rx="3"/></svg>
+          </div>
+          <span>AI 工坊</span>
+          <span class="nav-shortcut">6</span>
+        </li>
+        <li class="nav-item" data-tab="tab-settings" data-route="/settings">
+          <div class="nav-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </div>
+          <span>系统设置</span>
+          <span class="nav-shortcut">7</span>
+        </li>
+
+        <li class="nav-section-title">生态与文档</li>
+        <li>
+          <a href="https://zsrl.github.io/qka/" target="_blank" rel="noopener noreferrer" class="nav-item-link" title="访问 QKA 官方在线文档">
+            <div class="nav-icon">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+            </div>
+            <span>官方文档</span>
+            <span class="nav-ext-tag">Docs ↗</span>
+          </a>
+        </li>
+        <li>
+          <a href="https://github.com/zsrl/qka" target="_blank" rel="noopener noreferrer" class="nav-item-link" title="访问 GitHub 开源项目仓库">
+            <div class="nav-icon">
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+              </svg>
+            </div>
+            <span>GitHub 仓库</span>
+            <span class="nav-ext-tag">v0.1.0 ↗</span>
+          </a>
+        </li>
+      </ul>
+
+      <div class="sidebar-footer">
+        <div class="status-pill">
+          <div class="radar-dot"></div>
+          <span>127.0.0.1:15002</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 右侧主体工作区 (Main Content) -->
+    <main class="main-content">
+      <!-- 顶栏状态与全局命令栏 -->
+      <header class="top-header">
+        <div class="header-left">
+          <h2 id="page-title" class="page-title">总览大屏</h2>
+          <span id="page-subtitle" class="page-subtitle">QKA 核心运行状态与投研工作台</span>
+        </div>
+
+        <div class="header-right">
+          <button type="button" id="btn-open-cmd" class="cmd-trigger" title="全局命令与快速检索 (⌘K / Ctrl+K)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <span>搜索标的 / 快速指令...</span>
+            <kbd>⌘K</kbd>
+          </button>
+
+          <div class="runtime-pill">
+            <span style="width: 6px; height: 6px; border-radius: 50%; background-color: var(--color-emerald);"></span>
+            <span id="stat-core-mode">检测中...</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- 页面内容主体 -->
+      <div class="content-body">
+
+        <!-- TAB 1: 控制台总览 -->
+        <section id="tab-overview" class="tab-content active">
+          <div class="grid-4" style="margin-bottom: 16px;">
+            <div class="metric-box">
+              <div class="metric-label">
+                <span>QKA 引擎版本</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--brand-primary);"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+              </div>
+              <div class="metric-value" id="stat-qka-version">v0.1.0</div>
+              <div class="metric-sub">Python <span id="stat-python-version">-</span></div>
+            </div>
+            <div class="metric-box interactive" onclick="switchTab('tab-pool')">
+              <div class="metric-label">
+                <span>核心交易池标的</span>
+                <span style="font-size: 0.7rem; color: var(--brand-accent);">管理 ↗</span>
+              </div>
+              <div class="metric-value up" id="overview-trading-count">5 只</div>
+              <div class="metric-sub" id="overview-pool-sub">四大赛道三级漏斗精选</div>
+            </div>
+            <div class="metric-box">
+              <div class="metric-label">
+                <span>本地行情缓存</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-dim);"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+              </div>
+              <div class="metric-value" id="stat-cache-size">0 MB</div>
+              <div class="metric-sub" id="stat-cache-files">0 个缓存文件</div>
+            </div>
+            <div class="metric-box interactive" onclick="switchTab('tab-strategy')">
+              <div class="metric-label">
+                <span>量化策略模板</span>
+                <span style="font-size: 0.7rem; color: var(--brand-accent);">回测 ↗</span>
+              </div>
+              <div class="metric-value">4 套</div>
+              <div class="metric-sub">双均线 / 布林ATR / 轮动 / RSI</div>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <!-- 左侧：交易池实时盯盘快照 -->
+            <div class="card" style="margin-bottom: 0;">
+              <div class="card-header">
+                <h3 class="card-title">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--color-up);"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+                  交易股票池 · 盯盘焦点
+                </h3>
+                <div style="display: flex; gap: 6px;">
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="switchTab('tab-pool')">进入股票池</button>
+                  <button type="button" class="btn btn-primary btn-sm" onclick="handleExportTradingPoolToBacktest()">一键回测交易池</button>
+                </div>
+              </div>
+              <div class="table-responsive">
+                <table class="custom-table">
+                  <thead>
+                    <tr>
+                      <th>标的</th>
+                      <th>赛道</th>
+                      <th class="num-col">最新价</th>
+                      <th class="num-col">当日涨跌</th>
+                      <th class="num-col">3日累计</th>
+                      <th style="text-align: right;">看盘</th>
+                    </tr>
+                  </thead>
+                  <tbody id="overview-trading-tbody">
+                    <tr><td colspan="6" style="text-align: center; color: var(--text-dim); padding: 20px;">加载中...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- 右侧：量化投研工作流与交易准则 -->
+            <div class="card" style="margin-bottom: 0;">
+              <div class="card-header">
+                <h3 class="card-title">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--brand-accent);"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                  投研与回测闭环导航
+                </h3>
+              </div>
+
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px;">
+                <div onclick="switchTab('tab-pool')" style="background: var(--bg-subtle); border: 1px solid var(--border-color); padding: 12px; border-radius: var(--radius-sm); cursor: pointer; transition: border-color 0.15s;" onmouseover="this.style.borderColor='var(--brand-primary)'" onmouseout="this.style.borderColor='var(--border-color)'">
+                  <div style="font-weight: 600; font-size: 0.84rem; color: var(--text-main); display: flex; justify-content: space-between;">
+                    <span>1. 选赛道 · 建股票池</span>
+                    <span style="color: var(--brand-accent);">→</span>
+                  </div>
+                  <p style="font-size: 0.76rem; color: var(--text-dim); margin-top: 4px;">基础池 → 精选池 → 交易池三级减法，聚焦光通信、国产算力、AI电力与创新药。</p>
+                </div>
+
+                <div onclick="switchTab('tab-strategy')" style="background: var(--bg-subtle); border: 1px solid var(--border-color); padding: 12px; border-radius: var(--radius-sm); cursor: pointer; transition: border-color 0.15s;" onmouseover="this.style.borderColor='var(--brand-primary)'" onmouseout="this.style.borderColor='var(--border-color)'">
+                  <div style="font-weight: 600; font-size: 0.84rem; color: var(--text-main); display: flex; justify-content: space-between;">
+                    <span>2. 策略开发与回测</span>
+                    <span style="color: var(--brand-accent);">→</span>
+                  </div>
+                  <p style="font-size: 0.76rem; color: var(--text-dim); margin-top: 4px;">A 股 100 股整手、万 2.5 佣金、万 5 印花税拟真撮合，输出 13 项量化体检指标。</p>
+                </div>
+
+                <div onclick="switchTab('tab-market')" style="background: var(--bg-subtle); border: 1px solid var(--border-color); padding: 12px; border-radius: var(--radius-sm); cursor: pointer; transition: border-color 0.15s;" onmouseover="this.style.borderColor='var(--brand-primary)'" onmouseout="this.style.borderColor='var(--border-color)'">
+                  <div style="font-weight: 600; font-size: 0.84rem; color: var(--text-main); display: flex; justify-content: space-between;">
+                    <span>3. K 线与量价复盘</span>
+                    <span style="color: var(--brand-accent);">→</span>
+                  </div>
+                  <p style="font-size: 0.76rem; color: var(--text-dim); margin-top: 4px;">支持 Tickflow / Baostock / 通达信多源切换，日线均线叠加与成交量量价参考。</p>
+                </div>
+
+                <div onclick="switchTab('tab-simulate')" style="background: var(--bg-subtle); border: 1px solid var(--border-color); padding: 12px; border-radius: var(--radius-sm); cursor: pointer; transition: border-color 0.15s;" onmouseover="this.style.borderColor='var(--brand-primary)'" onmouseout="this.style.borderColor='var(--border-color)'">
+                  <div style="font-weight: 600; font-size: 0.84rem; color: var(--text-main); display: flex; justify-content: space-between;">
+                    <span>4. 随机过程压力测试</span>
+                    <span style="color: var(--brand-accent);">→</span>
+                  </div>
+                  <p style="font-size: 0.76rem; color: var(--text-dim); margin-top: 4px;">现场合成单边牛熊或均值回复震荡行情，无网验证止盈与回撤控制逻辑。</p>
+                </div>
+              </div>
+
+              <div style="background: rgba(59, 130, 246, 0.06); border: 1px solid rgba(59, 130, 246, 0.18); border-radius: var(--radius-sm); padding: 10px 12px; font-size: 0.78rem; color: var(--text-secondary);">
+                <strong style="color: #60a5fa;">交易纪律备忘：</strong>核心股票池看长做短，大跌分步低吸，单日涨幅偏离度大或连续 3 日大涨个股必须分步止盈（会卖的是师傅），控制回撤、积累收益。
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB 2: 股票池管理 (选赛道、做减法、精选股) -->
+        <section id="tab-pool" class="tab-content">
+          <!-- 顶部可交互漏斗 KPI 卡片 (点击直接切换层级，严格体现包含关系) -->
+          <div class="grid-4" style="margin-bottom: 14px;">
+            <div class="metric-box interactive" data-kpi-level="trading" onclick="selectPoolLevelTab('trading')" style="border-top: 2px solid var(--color-up);">
+              <div class="metric-label">
+                <span>交易股票池 (实盘盯盘)</span>
+                <span class="badge-level badge-trading">交易 ⊆ 精选 ⊆ 基础</span>
+              </div>
+              <div class="metric-value up" id="stat-pool-trading">0 只</div>
+              <div class="metric-sub">核心交易标的（必定同时属于精选与基础池）</div>
+            </div>
+
+            <div class="metric-box interactive" data-kpi-level="selected" onclick="selectPoolLevelTab('selected')" style="border-top: 2px solid var(--color-warning);">
+              <div class="metric-label">
+                <span>精选股票池 (包含交易股)</span>
+                <span class="badge-level badge-selected">精选 ⊆ 基础</span>
+              </div>
+              <div class="metric-value" id="stat-pool-selected" style="color: #fbbf24;">0 只</div>
+              <div class="metric-sub">层层选拔好公司（包含所有交易股，必定在基础池）</div>
+            </div>
+
+            <div class="metric-box interactive" data-kpi-level="basic" onclick="selectPoolLevelTab('basic')" style="border-top: 2px solid var(--brand-accent);">
+              <div class="metric-label">
+                <span>基础股票池 (全量底池)</span>
+                <span class="badge-level badge-basic">全量包含</span>
+              </div>
+              <div class="metric-value" id="stat-pool-basic" style="color: #38bdf8;">0 只</div>
+              <div class="metric-sub">全量底池（包含所有的精选股与交易股）</div>
+            </div>
+
+            <div class="metric-box interactive active-filter" data-kpi-level="all" onclick="selectPoolLevelTab('all')" style="border-top: 2px solid var(--brand-primary);">
+              <div class="metric-label">
+                <span>全部池内标的总览</span>
+                <span style="font-size: 0.7rem; color: var(--text-dim); font-family: var(--font-mono);" id="stat-pool-updated">-</span>
+              </div>
+              <div class="metric-value" id="stat-pool-total">0 只</div>
+              <div class="metric-sub">点击卡片按三级包含关系联动筛选</div>
+            </div>
+          </div>
+
+          <!-- 精炼方法论与快捷操作栏 -->
+          <div class="methodology-box">
+            <div style="display: flex; align-items: center; gap: 10px; font-size: 0.8rem; color: var(--text-secondary);">
+              <span style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; font-weight: 600; padding: 2px 8px; border-radius: 4px; font-size: 0.74rem; white-space: nowrap;">选赛道 · 做减法 · 精选股</span>
+              <span style="color: var(--text-muted);">
+                聚焦<strong>科技</strong>（光通信/存储/国产算力/AI电力/新材料/半导体设备）、<strong>消费</strong>（创新药/新消费）、<strong>周期</strong>（能源战略金属/锂电储能复苏）与<strong>大金融</strong>；剔除业绩下修、大额减持与纯炒作标的。
+              </span>
+            </div>
+            <div style="display: flex; gap: 8px; flex-shrink: 0;">
+              <button id="btn-open-add-stock" class="btn btn-primary btn-sm">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                添加标的
+              </button>
+              <button id="btn-open-import" class="btn btn-secondary btn-sm">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                研报/笔记导入
+              </button>
+              <button id="btn-export-to-backtest" class="btn btn-danger-ghost btn-sm">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                载入交易池至回测
+              </button>
+            </div>
+          </div>
+
+          <!-- 动态盯盘与风控提醒 (并排双栏) -->
+          <div id="pool-alerts-container" class="alerts-grid">
+            <div id="pool-alerts-tp" class="alert-banner alert-tp" style="display: none;">
+              <div style="flex: 1;">
+                <div style="font-weight: 600; color: #fda4af; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 3px;">
+                  分步止盈预警 · 会卖的是师傅（单日偏离大 / 3日连续累涨）
+                </div>
+                <div id="pool-alerts-tp-list" style="font-size: 0.8rem;"></div>
+              </div>
+            </div>
+            <div id="pool-alerts-dip" class="alert-banner alert-dip" style="display: none;">
+              <div style="flex: 1;">
+                <div style="font-weight: 600; color: #6ee7b7; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 3px;">
+                  分步低吸契机 · 看长做短（核心赛道好公司波段回调）
+                </div>
+                <div id="pool-alerts-dip-list" style="font-size: 0.8rem;"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 过滤、检索与赛道快捷药丸工具栏 -->
+          <div class="card" style="margin-bottom: 14px; padding: 12px 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+              <!-- 级别切换 -->
+              <div class="pool-tabs" id="pool-level-tabs">
+                <button class="pool-tab-btn active" data-level="all">全部标的</button>
+                <button class="pool-tab-btn" data-level="trading">交易股票池</button>
+                <button class="pool-tab-btn" data-level="selected">精选股票池</button>
+                <button class="pool-tab-btn" data-level="basic">基础股票池</button>
+              </div>
+
+              <!-- 赛道下拉与搜索 -->
+              <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                <select id="pool-category-select" class="form-control" style="width: auto; min-width: 165px; padding: 5px 10px; font-size: 0.8rem;">
+                  <option value="">全部赛道板块</option>
+                  <optgroup label="科技赛道">
+                    <option value="光通信">光通信 (800G/1.6T/CPO)</option>
+                    <option value="存储">存储 (HBM/DRAM/NAND)</option>
+                    <option value="国产算力">国产算力 (AI服务器/GPU)</option>
+                    <option value="电力">电力 (AI基建/燃机/储能)</option>
+                    <option value="新材料">新材料 (高阶材料)</option>
+                    <option value="半导体设备">半导体设备 (算力/光模块设备)</option>
+                  </optgroup>
+                  <optgroup label="消费赛道 (做减法)">
+                    <option value="创新药">必选消费：创新药</option>
+                    <option value="新消费">可选消费：新消费</option>
+                  </optgroup>
+                  <optgroup label="周期赛道 (做减法)">
+                    <option value="能源金属">能源金属 (锂/钴/镍)</option>
+                    <option value="战略金属">战略金属 (铜/钼/钨/稀土)</option>
+                    <option value="锂电储能复苏">锂电与储能周期复苏</option>
+                  </optgroup>
+                  <optgroup label="大金融赛道">
+                    <option value="大金融">大金融 (核心银行/保险)</option>
+                  </optgroup>
+                </select>
+
+                <input type="text" id="pool-search-input" class="form-control" placeholder="搜索代码、简称或核心逻辑..." style="width: 210px; padding: 5px 10px; font-size: 0.8rem;">
+                <button id="btn-pool-refresh" class="btn btn-secondary btn-sm" title="刷新股票池数据">刷新</button>
+              </div>
+            </div>
+
+            <!-- 一键赛道药丸筛选栏 -->
+            <div class="sector-pills-bar" id="sector-quick-pills">
+              <span style="font-size: 0.72rem; color: var(--text-dim); margin-right: 4px;">核心赛道：</span>
+              <button type="button" class="sector-pill active" data-cat="">全部</button>
+              <button type="button" class="sector-pill" data-cat="光通信">光通信</button>
+              <button type="button" class="sector-pill" data-cat="国产算力">国产算力</button>
+              <button type="button" class="sector-pill" data-cat="存储">存储</button>
+              <button type="button" class="sector-pill" data-cat="电力">电力·AI基建</button>
+              <button type="button" class="sector-pill" data-cat="半导体设备">半导体设备</button>
+              <button type="button" class="sector-pill" data-cat="新材料">新材料</button>
+              <button type="button" class="sector-pill" data-cat="创新药">创新药</button>
+              <button type="button" class="sector-pill" data-cat="新消费">新消费</button>
+              <button type="button" class="sector-pill" data-cat="锂电储能复苏">锂电储能复苏</button>
+              <button type="button" class="sector-pill" data-cat="战略金属">战略/能源金属</button>
+              <button type="button" class="sector-pill" data-cat="大金融">大金融</button>
+            </div>
+          </div>
+
+          <!-- 标的列表表格 -->
+          <div class="card" style="padding: 0; overflow: hidden; margin-bottom: 0;">
+            <div class="table-responsive">
+              <table class="custom-table" style="margin: 0;">
+                <thead>
+                  <tr>
+                    <th style="min-width: 120px;">标的 (点击看盘)</th>
+                    <th style="min-width: 135px;">池层级 (一键切换)</th>
+                    <th style="min-width: 140px;">所属赛道</th>
+                    <th class="num-col" style="min-width: 80px;">最新价</th>
+                    <th class="num-col" style="min-width: 80px;">当日涨跌</th>
+                    <th class="num-col" style="min-width: 80px;">3日涨跌</th>
+                    <th style="min-width: 240px;">核心逻辑与驱动力</th>
+                    <th style="min-width: 170px;">关联研报 / 公告</th>
+                    <th style="min-width: 150px;">风控与瑕疵排查</th>
+                    <th style="min-width: 85px;">更新日期</th>
+                    <th style="min-width: 100px; text-align: right;">操作</th>
+                  </tr>
+                </thead>
+                <tbody id="pool-table-body">
+                  <tr>
+                    <td colspan="11" style="text-align: center; padding: 40px; color: var(--text-dim);">
+                      正在加载股票池数据...
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB 3: 策略开发与回测 -->
+        <section id="tab-strategy" class="tab-content">
+          <div class="grid-3" style="margin-bottom: 16px;">
+            <!-- 策略参数面板 -->
+            <div class="card" style="margin-bottom: 0;">
+              <div class="card-header">
+                <h3 class="card-title">回测参数配置</h3>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="handleExportTradingPoolToBacktest()" title="从交易股票池拉取标的">导入交易池标的</button>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">策略预置模板</label>
+                <select id="preset-select" class="form-control"></select>
+                <div id="preset-description" style="font-size: 0.74rem; color: var(--text-dim); margin-top: 5px;"></div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">回测标的池 (英文逗号隔开)</label>
+                <input type="text" id="bt-symbols" class="form-control" value="000001.SZ" style="font-family: var(--font-mono);">
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">初始本金 (元)</label>
+                  <input type="number" id="bt-cash" class="form-control" value="200000">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">基准指数</label>
+                  <input type="text" id="bt-benchmark" class="form-control" value="000300.SH" style="font-family: var(--font-mono);">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">起始日期</label>
+                  <input type="date" id="bt-start" class="form-control" value="2023-01-01">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">截止日期</label>
+                  <input type="date" id="bt-end" class="form-control" value="2024-12-31">
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">因子预热天数 (warmup)</label>
+                <input type="number" id="bt-warmup" class="form-control" value="20">
+              </div>
+
+              <button id="btn-run-backtest" class="btn btn-primary" style="width: 100%; margin-top: 6px;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                启动策略回测 (⌘Enter)
+              </button>
+            </div>
+
+            <!-- 代码编辑器面板 -->
+            <div class="card" style="grid-column: span 2; margin-bottom: 0;">
+              <div class="card-header">
+                <h3 class="card-title">策略 Python 源码 (继承 qka.Strategy)</h3>
+                <span style="font-size: 0.75rem; font-family: var(--font-mono); color: var(--brand-accent);">def on_bar(self, date)</span>
+              </div>
+              <div class="code-editor-wrapper">
+                <div class="code-editor-toolbar">
+                  <span>Python 3.10+ · QKA Strategy Runtime</span>
+                  <span>UTF-8 · Tab=4 Spaces</span>
+                </div>
+                <textarea id="strategy-code" class="code-textarea" spellcheck="false"></textarea>
+              </div>
+            </div>
+          </div>
+
+          <!-- 回测结果看板 -->
+          <div class="card" style="margin-bottom: 0;">
+            <div class="card-header">
+              <h3 class="card-title">策略绩效体检大屏</h3>
+              <span style="font-size: 0.74rem; color: var(--text-dim);">A股拟真撮合：100股整手 / 万2.5佣金 / 万5印花税</span>
+            </div>
+
+            <div class="grid-4" style="margin-bottom: 16px;">
+              <div class="metric-box">
+                <div class="metric-label">累计总收益率</div>
+                <div class="metric-value" id="kpi-total-return">-</div>
+              </div>
+              <div class="metric-box">
+                <div class="metric-label">年化复合收益率</div>
+                <div class="metric-value" id="kpi-annual-return">-</div>
+              </div>
+              <div class="metric-box">
+                <div class="metric-label">夏普比率 (Sharpe)</div>
+                <div class="metric-value" id="kpi-sharpe">-</div>
+              </div>
+              <div class="metric-box">
+                <div class="metric-label">最大历史回撤</div>
+                <div class="metric-value down" id="kpi-max-dd">-</div>
+              </div>
+              <div class="metric-box">
+                <div class="metric-label">卡玛比率 (Calmar)</div>
+                <div class="metric-value" id="kpi-calmar">-</div>
+              </div>
+              <div class="metric-box">
+                <div class="metric-label">交易胜率 (Win Rate)</div>
+                <div class="metric-value" id="kpi-win-rate">-</div>
+              </div>
+              <div class="metric-box">
+                <div class="metric-label">盈亏比 (P/L Ratio)</div>
+                <div class="metric-value" id="kpi-pl-ratio">-</div>
+              </div>
+              <div class="metric-box">
+                <div class="metric-label">总交易笔数</div>
+                <div class="metric-value" id="kpi-trades">-</div>
+              </div>
+            </div>
+
+            <!-- 净值走势图与回撤图 -->
+            <div class="grid-2">
+              <div style="background: var(--bg-input); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 12px;">
+                <h4 style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 6px; font-weight: 500;">累计净值走势 vs 基准对比</h4>
+                <div id="backtest-equity-chart" class="chart-box-sm"></div>
+              </div>
+              <div style="background: var(--bg-input); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 12px;">
+                <h4 style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 6px; font-weight: 500;">动态水下回撤曲线 (%)</h4>
+                <div id="backtest-dd-chart" class="chart-box-sm"></div>
+              </div>
+            </div>
+
+            <!-- 最近成交流水 -->
+            <div style="margin-top: 18px;">
+              <h4 style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 10px; font-weight: 600;">最近成交流水明细</h4>
+              <div class="table-responsive">
+                <table class="custom-table">
+                  <thead>
+                    <tr>
+                      <th>成交时间</th>
+                      <th>方向</th>
+                      <th>标的代码</th>
+                      <th class="num-col">委托基准价</th>
+                      <th class="num-col">实际撮合价 (含滑点)</th>
+                      <th class="num-col">成交股数</th>
+                      <th class="num-col">手续费支出</th>
+                    </tr>
+                  </thead>
+                  <tbody id="trade-history-body">
+                    <tr><td colspan="7" style="text-align: center; color: var(--text-dim); padding: 24px;">点击上方「启动策略回测」生成交易流水</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB 4: 行情与指标探索 -->
+        <section id="tab-market" class="tab-content">
+          <div class="card">
+            <div style="display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap;">
+              <div class="form-group" style="margin-bottom: 0; flex: 1; min-width: 150px;">
+                <label class="form-label">标的代码 (股票 / ETF / 转债)</label>
+                <input type="text" id="market-symbol" class="form-control" value="300308.SZ" style="font-family: var(--font-mono);">
+              </div>
+              <div class="form-group" style="margin-bottom: 0; flex: 1; min-width: 180px;">
+                <label class="form-label">行情数据源</label>
+                <select id="market-source" class="form-control">
+                  <option value="tickflow">Tickflow (默认免密 / ETF / 转债)</option>
+                  <option value="baostock">Baostock (含估值指标)</option>
+                  <option value="tdx">通达信本地源 (Windows)</option>
+                </select>
+              </div>
+              <div class="form-group" style="margin-bottom: 0; width: 130px;">
+                <label class="form-label">复权口径</label>
+                <select id="market-adjust" class="form-control">
+                  <option value="qfq">前复权 (qfq)</option>
+                  <option value="hfq">后复权 (hfq)</option>
+                  <option value="bfq">不复权 (bfq)</option>
+                </select>
+              </div>
+              <div class="form-group" style="margin-bottom: 0; width: 140px;">
+                <label class="form-label">起始日期</label>
+                <input type="date" id="market-start" class="form-control" value="2023-01-01">
+              </div>
+              <div class="form-group" style="margin-bottom: 0; width: 140px;">
+                <label class="form-label">截止日期</label>
+                <input type="date" id="market-end" class="form-control" value="2024-12-31">
+              </div>
+              <button id="btn-fetch-market" class="btn btn-primary" style="height: 35px;">
+                查询行情
+              </button>
+            </div>
+          </div>
+
+          <!-- K 线图 -->
+          <div class="card">
+            <div class="card-header">
+              <h3 class="card-title">交互式日 K 线、均线系统与成交量参考</h3>
+              <span style="font-size: 0.74rem; color: var(--text-dim);">红涨绿跌 · 支持滚轮缩放与十字光标</span>
+            </div>
+            <div id="market-chart" class="chart-box"></div>
+          </div>
+
+          <!-- 最近数据表格 -->
+          <div class="card" style="margin-bottom: 0;">
+            <div class="card-header">
+              <h3 class="card-title">最近 10 个交易日切片</h3>
+            </div>
+            <div class="table-responsive">
+              <table class="custom-table">
+                <thead>
+                  <tr>
+                    <th>交易日</th>
+                    <th class="num-col">开盘价</th>
+                    <th class="num-col">最高价</th>
+                    <th class="num-col">最低价</th>
+                    <th class="num-col">收盘价</th>
+                    <th class="num-col">成交量</th>
+                    <th class="num-col">MA5</th>
+                    <th class="num-col">MA20</th>
+                  </tr>
+                </thead>
+                <tbody id="market-table-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB 5: 模拟标的生成器 -->
+        <section id="tab-simulate" class="tab-content">
+          <div class="grid-3">
+            <div class="card" style="margin-bottom: 0;">
+              <div class="card-header">
+                <h3 class="card-title">随机过程参数 (qka.Simulate)</h3>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">模拟标的代码</label>
+                <input type="text" id="sim-symbol" class="form-control" value="SIM.BULL" style="font-family: var(--font-mono);">
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">日漂移率 μ (正=上涨趋势, 负=下跌趋势)</label>
+                <input type="number" id="sim-drift" class="form-control" value="0.001" step="0.0005">
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">均值回复强度 θ (≥0)</label>
+                <input type="number" id="sim-reversion" class="form-control" value="0.02" step="0.01">
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">日波动率 σ (>0)</label>
+                <input type="number" id="sim-vol" class="form-control" value="0.015" step="0.002">
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">初始基准价格</label>
+                  <input type="number" id="sim-price" class="form-control" value="100.0">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">模拟天数</label>
+                  <input type="number" id="sim-days" class="form-control" value="250">
+                </div>
+              </div>
+
+              <button id="btn-run-simulate" class="btn btn-primary" style="width: 100%; margin-top: 6px;">
+                现场合成行情
+              </button>
+            </div>
+
+            <div class="card" style="grid-column: span 2; margin-bottom: 0;">
+              <div class="card-header">
+                <h3 class="card-title">几何布朗运动与奥恩斯坦-乌伦贝克均值回复演化</h3>
+              </div>
+              <div id="simulate-chart" class="chart-box"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB 6: AI 策略工坊 -->
+        <section id="tab-ai" class="tab-content">
+          <div class="card" style="margin-bottom: 0;">
+            <div class="card-header">
+              <h3 class="card-title">AI Agent 技能标准化集成</h3>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.85rem; line-height: 1.7;">
+              QKA 原生适配 Claude Code、Cursor 与 Windsurf 智能体协议。安装官方技能包后，AI 编程助手将自动遵循 QKA 框架规范（防未来函数、预热期 warmup、前复权负价格防护）编写回测代码：
+            </p>
+            <div style="background: var(--bg-input); padding: 12px 16px; border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 0.84rem; color: var(--brand-accent); margin: 14px 0; border: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
+              <span>npx skills add zsrl/qka</span>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="navigator.clipboard.writeText('npx skills add zsrl/qka'); showToast('已复制安装命令', 'success');">复制命令</button>
+            </div>
+            <h4 style="font-size: 0.86rem; margin-top: 18px; margin-bottom: 10px; color: var(--text-main);">推荐量化 Prompt 模板（点击即可复制）：</h4>
+            <div class="grid-2">
+              <div onclick="navigator.clipboard.writeText(this.querySelector('p').textContent); showToast('已复制 Prompt 模板', 'info');" style="background: var(--bg-subtle); padding: 14px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); cursor: pointer;">
+                <strong style="color: #60a5fa; font-size: 0.84rem;">赛道股趋势动量 + 分步止盈策略</strong>
+                <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px;">帮我用 QKA 编写针对中际旭创(300308.SZ)和新易盛(300502.SZ)的趋势策略：站上20日均线且放量时分批建仓，单日涨幅超6%或3日累计涨幅超12%时分步止盈50%仓位，跌破20日线清仓控制回撤。</p>
+              </div>
+              <div onclick="navigator.clipboard.writeText(this.querySelector('p').textContent); showToast('已复制 Prompt 模板', 'info');" style="background: var(--bg-subtle); padding: 14px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); cursor: pointer;">
+                <strong style="color: var(--color-emerald); font-size: 0.84rem;">布林带突破 + ATR 风险平价策略</strong>
+                <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px;">用 QKA 编写沪深 300 ETF 的布林带突破策略，突破上轨买入，使用 self.sizing.atr_risk 限制单笔最大风险为 1.5%，跌破中轨止盈卖出。</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB 7: 系统与参数设置 -->
+        <section id="tab-settings" class="tab-content">
+          <!-- 顶部操作条 -->
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; background: var(--bg-card); padding: 12px 18px; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
+            <div>
+              <span style="font-weight: 600; color: var(--text-main); font-size: 0.88rem;">全局配置管理</span>
+              <span style="font-size: 0.76rem; color: var(--text-dim); margin-left: 12px;">配置文件: <code id="cfg-file-path" style="color: var(--brand-accent); font-family: var(--font-mono);">-</code></span>
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <button id="btn-reset-config" class="btn btn-secondary btn-sm">恢复出厂默认</button>
+              <button id="btn-save-config" class="btn btn-primary btn-sm">保存全局配置</button>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <!-- 1. 行情与数据源配置 -->
+            <div class="card">
+              <div class="card-header">
+                <h3 class="card-title">行情与数据源配置 (Data)</h3>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">默认数据源</label>
+                  <select id="cfg-data-source" class="form-control">
+                    <option value="tickflow">Tickflow (免费默认 / 全量ETF & 转债)</option>
+                    <option value="baostock">Baostock (含估值指标)</option>
+                    <option value="tdx">通达信本地源 (Windows TQ客户端)</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">默认复权口径</label>
+                  <select id="cfg-data-adjust" class="form-control">
+                    <option value="qfq">前复权 (qfq, 回测推荐)</option>
+                    <option value="hfq">后复权 (hfq)</option>
+                    <option value="bfq">不复权 (bfq)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">默认行情周期</label>
+                  <select id="cfg-data-period" class="form-control">
+                    <option value="1d">1d (日线)</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">默认预热天数 (warmup)</label>
+                  <input type="number" id="cfg-data-warmup" class="form-control" value="20" min="0">
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">TickFlow 专有 API Key (可选)</label>
+                <div style="display: flex; gap: 8px;">
+                  <input type="password" id="cfg-tickflow-key" class="form-control" placeholder="留空则走公共免费档 (free-api.tickflow.org)">
+                  <button type="button" id="btn-test-tickflow" class="btn btn-secondary btn-sm">测试连通</button>
+                </div>
+                <div id="tickflow-test-msg" style="font-size: 0.74rem; margin-top: 4px; display: none;"></div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">通达信安装目录 (Windows TQ版)</label>
+                <div style="display: flex; gap: 8px;">
+                  <input type="text" id="cfg-tdx-root" class="form-control" placeholder="如 D:\new_tdx64 (含PYPlugins)">
+                  <button type="button" id="btn-detect-tdx" class="btn btn-secondary btn-sm">自动探测</button>
+                </div>
+                <div id="tdx-detect-msg" style="font-size: 0.74rem; color: var(--text-dim); margin-top: 4px;"></div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">自定义本地缓存目录 (datadir)</label>
+                <input type="text" id="cfg-data-datadir" class="form-control" placeholder="留空则自动使用 ~/.qka 或 ./datadir">
+              </div>
+
+              <div style="display: flex; gap: 20px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-subtle);">
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 0.8rem; cursor: pointer; color: var(--text-muted);">
+                  <input type="checkbox" id="cfg-factor-cache">
+                  <span>持久化因子落盘 (factor_cache)</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 0.8rem; cursor: pointer; color: var(--text-muted);">
+                  <input type="checkbox" id="cfg-fill-suspended">
+                  <span>前收补齐停牌日 (fill_suspended)</span>
+                </label>
+              </div>
+            </div>
+
+            <!-- 2. 交易与撮合费率配置 -->
+            <div>
+              <div class="card">
+                <div class="card-header">
+                  <h3 class="card-title">交易撮合与费率模型 (Broker)</h3>
+                </div>
+
+                <div class="form-row">
+                  <div class="form-group">
+                    <label class="form-label">买卖佣金费率</label>
+                    <input type="number" id="cfg-broker-commission" class="form-control" step="0.00005" value="0.00025">
+                    <div style="font-size: 0.7rem; color: var(--text-dim); margin-top: 3px;">0.00025 代表万分之 2.5</div>
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">最低佣金门槛 (元)</label>
+                    <input type="number" id="cfg-broker-min-commission" class="form-control" step="0.5" value="5.0">
+                    <div style="font-size: 0.7rem; color: var(--text-dim); margin-top: 3px;">单笔交易最低扣除金额</div>
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <div class="form-group">
+                    <label class="form-label">卖出印花税率</label>
+                    <input type="number" id="cfg-broker-stamp-duty" class="form-control" step="0.0001" value="0.0005">
+                    <div style="font-size: 0.7rem; color: var(--text-dim); margin-top: 3px;">单向卖出收取 (0.0005 为万5)</div>
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">买卖滑点比率</label>
+                    <input type="number" id="cfg-broker-slippage" class="form-control" step="0.0005" value="0.001">
+                    <div style="font-size: 0.7rem; color: var(--text-dim); margin-top: 3px;">默认 0.001 (0.1% 滑点)</div>
+                  </div>
+                </div>
+
+                <div class="form-group" style="margin-bottom: 0;">
+                  <label class="form-label">默认初始回测本金 (元)</label>
+                  <input type="number" id="cfg-broker-cash" class="form-control" step="50000" value="200000">
+                </div>
+              </div>
+
+              <!-- 3. 回测基准与无风险利率 -->
+              <div class="card">
+                <div class="card-header">
+                  <h3 class="card-title">回测评估与基准配置 (Backtest)</h3>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label">默认基准指数代码</label>
+                  <input type="text" id="cfg-backtest-benchmark" class="form-control" value="000300.SH" style="font-family: var(--font-mono);">
+                  <div style="display: flex; gap: 6px; margin-top: 6px;">
+                    <span class="btn btn-secondary btn-sm preset-benchmark-pill" data-code="000300.SH" style="padding: 2px 8px; font-size: 0.72rem;">沪深300</span>
+                    <span class="btn btn-secondary btn-sm preset-benchmark-pill" data-code="000905.SH" style="padding: 2px 8px; font-size: 0.72rem;">中证500</span>
+                    <span class="btn btn-secondary btn-sm preset-benchmark-pill" data-code="399006.SZ" style="padding: 2px 8px; font-size: 0.72rem;">创业板指</span>
+                    <span class="btn btn-secondary btn-sm preset-benchmark-pill" data-code="000001.SH" style="padding: 2px 8px; font-size: 0.72rem;">上证指数</span>
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <div class="form-group" style="margin-bottom: 0;">
+                    <label class="form-label">年化无风险利率 (rf)</label>
+                    <input type="number" id="cfg-backtest-rf" class="form-control" step="0.005" value="0.03">
+                  </div>
+                  <div class="form-group" style="margin-bottom: 0;">
+                    <label class="form-label">年化交易日基数</label>
+                    <input type="number" id="cfg-backtest-periods" class="form-control" value="252">
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 4. 磁盘缓存与存储管理 -->
+          <div class="card" style="margin-bottom: 0;">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px;">
+              <div>
+                <p style="color: var(--text-secondary); font-size: 0.84rem; font-weight: 500;">
+                  本地缓存根目录：<code id="stat-cache-path" style="color: var(--brand-accent); font-family: var(--font-mono);">-</code>
+                </p>
+                <div style="font-size: 0.76rem; color: var(--text-dim); margin-top: 3px;">
+                  共缓存 <strong id="stat-cache-files-2" style="color: var(--text-main);">0</strong> 个历史标的文件，占用磁盘 <strong id="stat-cache-size-2" style="color: var(--text-main);">0 MB</strong>
+                </div>
+              </div>
+              <button id="btn-clear-cache" class="btn btn-secondary btn-sm">一键清空行情缓存</button>
+            </div>
+          </div>
+        </section>
+
+      </div>
+
+      <!-- 页脚 -->
+      <footer class="footer">
+        <span>QKA — 快量化 (Quant Kit for A-shares) &copy; 2024-present · MIT License</span>
+        <span style="font-family: var(--font-mono);">快捷键: ⌘K 全局命令 · 数字键 1-7 切换模块</span>
+      </footer>
+    </main>
+
+  </div>
+
+  <!-- 全局命令面板 (Command Palette ⌘K) -->
+  <div id="modal-cmd" class="modal-overlay">
+    <div class="cmd-palette-box">
+      <div class="cmd-input-wrap">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--brand-accent);"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" id="cmd-palette-input" class="cmd-input" placeholder="输入股票代码/名称看盘，或选择快捷指令 (Esc 关闭)..." autocomplete="off">
+      </div>
+      <div id="cmd-palette-results" class="cmd-results"></div>
+    </div>
+  </div>
+
+  <!-- 标的添加/编辑弹窗 (Stock Modal) -->
+  <div id="modal-stock" class="modal-overlay">
+    <div class="modal-container">
+      <div class="modal-header">
+        <h3 id="modal-stock-title" class="card-title">添加股票至股票池</h3>
+        <button class="modal-close" id="btn-close-stock-modal">&times;</button>
+      </div>
+
+      <form id="form-stock" onsubmit="return false;">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">股票代码 (如 300308.SZ)</label>
+            <input type="text" id="stock-symbol" class="form-control" required placeholder="000001.SZ / 600519.SH" style="font-family: var(--font-mono);">
+          </div>
+          <div class="form-group">
+            <label class="form-label">股票名称</label>
+            <input type="text" id="stock-name" class="form-control" required placeholder="如 中际旭创">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">入池层级 (三级漏斗筛选)</label>
+            <select id="stock-level" class="form-control">
+              <option value="basic">基础股票池 (研报/笔记初选)</option>
+              <option value="selected">精选股票池 (精选好行业好公司)</option>
+              <option value="trading">交易股票池 (极少数看盘与实战)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">所属赛道板块 (逗号分隔)</label>
+            <input type="text" id="stock-categories" class="form-control" placeholder="科技, 光通信" value="科技, 光通信">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">参考最新价 (元)</label>
+            <input type="number" id="stock-price" class="form-control" step="0.01" placeholder="100.00">
+          </div>
+          <div class="form-group">
+            <label class="form-label">当日涨跌幅 (%)</label>
+            <input type="number" id="stock-change-pct" class="form-control" step="0.01" placeholder="3.5">
+          </div>
+          <div class="form-group">
+            <label class="form-label">3日累计涨跌 (%)</label>
+            <input type="number" id="stock-change-3d" class="form-control" step="0.01" placeholder="8.2">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">核心投资逻辑与驱动力</label>
+          <textarea id="stock-reason" class="form-control" rows="2" placeholder="简述核心逻辑，如：海外顶级算力云客户核心供应商，1.6T需求确定性强..."></textarea>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">关联研报 / 公告 / 互动 (换行或分号分隔)</label>
+          <textarea id="stock-reports" class="form-control" rows="2" placeholder="中信建投-光通信行业深度；三季度业绩预增公告"></textarea>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">风险与瑕疵排查 (业绩下修/减持/炒作过度/止盈提示)</label>
+          <input type="text" id="stock-risk-notes" class="form-control" placeholder="如：单日涨幅偏离过大时注意分步止盈，排查解禁减持">
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;">
+          <button type="button" class="btn btn-secondary" id="btn-cancel-stock-modal">取消</button>
+          <button type="submit" class="btn btn-primary" id="btn-save-stock">保存标的</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 研报与笔记智能导入弹窗 (Import Modal) -->
+  <div id="modal-import" class="modal-overlay">
+    <div class="modal-container" style="max-width: 640px;">
+      <div class="modal-header">
+        <h3 class="card-title">券商研报 / 微博笔记智能批量导入</h3>
+        <button class="modal-close" id="btn-close-import-modal">&times;</button>
+      </div>
+
+      <div style="margin-bottom: 12px; font-size: 0.8rem; color: var(--text-muted); line-height: 1.5;">
+        直接粘贴券商研报摘要、分析师观点或每日微博功课笔记（如“专业证券和财富秘钥”），系统将实时识别文中 A 股代码与简称并批量入池。
+      </div>
+
+      <div class="form-row" style="margin-bottom: 10px;">
+        <div class="form-group" style="margin-bottom: 0;">
+          <label class="form-label">默认归入层级</label>
+          <select id="import-level" class="form-control">
+            <option value="basic">基础股票池 (推荐初选池)</option>
+            <option value="selected">精选股票池</option>
+            <option value="trading">交易股票池</option>
+          </select>
+        </div>
+        <div class="form-group" style="margin-bottom: 0;">
+          <label class="form-label">默认赛道分类</label>
+          <select id="import-category" class="form-control">
+            <option value="科技">科技 (光通信/算力/存储/AI电力/半导体)</option>
+            <option value="消费">消费 (创新药/新消费)</option>
+            <option value="周期">周期 (能源金属/战略金属/锂电储能)</option>
+            <option value="大金融">大金融 (核心银行/高股息)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-group" style="margin-top: 10px;">
+        <label class="form-label">粘贴研报 / 笔记文本</label>
+        <textarea id="import-text" class="form-control" rows="6" placeholder="例如：
+【中信建投光通信深度】重点推荐中际旭创(300308)与新易盛(300502)，1.6T光模块放量在即。
+【周期复苏】看好宁德时代(300750)储能出海与排产提升；关注洛阳钼业(603993)铜钼放量..."></textarea>
+      </div>
+
+      <!-- 实时识别预览栏 -->
+      <div id="import-live-preview" style="background: var(--bg-input); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 8px 12px; font-size: 0.76rem; color: var(--text-dim); min-height: 36px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+        <span>等待输入文本以实时预览识别到的股票代码...</span>
+      </div>
+
+      <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;">
+        <button type="button" class="btn btn-secondary" id="btn-cancel-import-modal">取消</button>
+        <button type="button" class="btn btn-primary" id="btn-submit-import">智能萃取并入池</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/console.js"></script>
+</body>
+</html>

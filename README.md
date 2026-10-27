@@ -40,6 +40,19 @@ npx skills add zsrl/qka
 
 安装后，AI 助手即可自动加载 QKA 框架的 API 文档，生成符合规范的量化策略代码。
 
+## 🖥️ Web 可视化控制台
+
+QKA 内置了轻量级、响应式的现代化 Web 控制台，包含行情与 K 线探索、策略在线编写与实时回测、13 项绩效与净值大屏、模拟标的生成器与 AI 策略工坊：
+
+```bash
+# 一键启动（自动打开 http://127.0.0.1:15002）
+./start.sh          # macOS / Linux
+start.bat           # Windows（支持直接双击运行）
+
+# 或使用 CLI 命令行工具启动
+qka console --port 15002
+```
+
 ## 快速上手
 
 ### 数据
