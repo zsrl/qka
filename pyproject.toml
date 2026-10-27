@@ -39,6 +39,7 @@ dev = [
 
 [project.urls]
 Home = "https://github.com/zsrl/qka"
+Documentation = "https://zsrl.github.io/qka/"
 Repository = "https://github.com/zsrl/qka"
 Issues = "https://github.com/zsrl/qka/issues"
 

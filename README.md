@@ -5,6 +5,9 @@
   <a href="https://pypi.org/project/qka/">
     <img src="https://img.shields.io/pypi/v/qka?color=blue" alt="PyPI">
   </a>
+  <a href="https://zsrl.github.io/qka/">
+    <img src="https://img.shields.io/badge/docs-GitHub%20Pages-0ea5e9.svg" alt="Documentation">
+  </a>
   <a href="https://github.com/zsrl/qka">
     <img src="https://img.shields.io/badge/python-3.10+-blue" alt="Python">
   </a>
@@ -101,7 +104,14 @@ print(bt.metrics['sharpe_ratio'])        # 夏普比率
 
 ## 文档
 
-框架 API 完整文档见 [skills/qka/SKILL.md](skills/qka/SKILL.md)——所有类的方法签名、参数、返回值和约束都在里面。
+- **官方文档网站**：[https://zsrl.github.io/qka/](https://zsrl.github.io/qka/)（包含完整的起步教程、数据源与因子、回测与报告、最佳实践及完整 API 参考）
+- **本地启动文档**：
+  ```bash
+  cd website
+  npm install
+  npm run dev
+  ```
+- **AI 技能规范**：见 [skills/qka/SKILL.md](skills/qka/SKILL.md)（所有类的方法签名、参数、返回值和约束）
 
 ## 完整示例
 

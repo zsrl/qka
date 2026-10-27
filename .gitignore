@@ -186,3 +186,8 @@ reports/
 
 # 临时脚本
 _commit.ps1
+
+# Website / VitePress
+website/node_modules/
+website/.vitepress/dist/
+website/.vitepress/cache/
