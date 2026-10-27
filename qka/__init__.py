@@ -12,19 +12,20 @@ except PackageNotFoundError:
     __version__ = "0.1.0"  # fallback version
 
 # 核心功能直接导入
-from qka.core.simulate import Simulate
-from qka.core.data import Data, set_tickflow_api_key
-from qka.core.accessor import DataAccessor
-from qka.core.backtest import Backtest
-from qka.core.strategy import Strategy
-from qka.core.broker import Broker
-from qka.core.sizing import SizingAccessor
-from qka.core.analysis import Analysis, Segment, AlphaBeta
-# 通达信数据源：安装目录的设置与查询（source='tdx' 时使用）
-from qka.core.tdx import set_tdx_root, get_tdx_root_info
-
-# 子模块导入
-from qka import core, utils
+try:
+    from qka.core.simulate import Simulate
+    from qka.core.data import Data, set_tickflow_api_key
+    from qka.core.accessor import DataAccessor
+    from qka.core.backtest import Backtest
+    from qka.core.strategy import Strategy
+    from qka.core.broker import Broker
+    from qka.core.sizing import SizingAccessor
+    from qka.core.analysis import Analysis, Segment, AlphaBeta
+    # 通达信数据源：安装目录的设置与查询（source='tdx' 时使用）
+    from qka.core.tdx import set_tdx_root, get_tdx_root_info
+    from qka import core, utils
+except ImportError:
+    pass
 
 __all__ = [
     # 核心功能
