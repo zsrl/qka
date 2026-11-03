@@ -1,4 +1,4 @@
-# QKA — 快量化
+# QKA — A股量化回测工具包
 ## Quant Kit for A-shares
 
 <p align="center">
@@ -16,6 +16,14 @@
 简洁易用的 A 股量化回测框架。
 
 ---
+
+## QKA云服务
+
+[快量化](https://quantai.chat) — 基于 QKA 的多因子回测云平台。
+
+使用该平台，无需本地安装环境，一键完成因子回测，并导出实盘策略，欢迎访问。
+
+https://quantai.chat
 
 ## 安装
 
