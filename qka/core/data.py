@@ -1017,7 +1017,9 @@ class Data():
                         parquet_path)
                 ddf['returns'] = ddf['close'].diff() / ddf['close'].shift(1)
                 ddf = self._drop_head_lazy(ddf)
-                ddf = self._apply_factors(ddf)
+                # 🚨 因子不在这里算 —— 要等基准注入之后统一算（见下方 _apply_all_factors）。
+                #    原因：内置因子和自定义因子没有本质区别，都可能是「相对基准」的，
+                #    唯一合理的位置是「拿到基准之后」，而不是分两处、按两种时机各算一遍。
                 column_mapping = {col: f'{symbol}|{col}' for col in ddf.columns}
                 dfs.append(ddf.rename(columns=column_mapping))
 
@@ -1028,17 +1030,19 @@ class Data():
                 )
 
             ddf = dd.concat(dfs, axis=1, join='outer')
-            # 切片回用户请求的日期范围（去掉指标预热扩展部分）
-            if start_date is not None and max_window > 0:
-                cutoff = pd.Timestamp(start_date)
-                ddf = ddf.loc[cutoff:]
 
-            # 基准数据
+            # 基准数据（必须在算因子之前 —— 因子可能需要它）
             if self.benchmark:
                 ddf = self._add_benchmark(ddf, self.target_dir, pq_filters)
 
-            # qka 内置指标（需要 benchmark 和 symbol 前缀）
-            ddf = self._apply_qka_factors(ddf)
+            # 所有因子，一处计算：内置 / ta / 自定义一视同仁
+            ddf = self._apply_all_factors(ddf)
+
+            # 切片回用户请求的日期范围（去掉指标预热扩展部分）——
+            # 必须放在算因子之后：因子要吃掉预热那段数据，切早了窗口就不够长。
+            if start_date is not None and max_window > 0:
+                cutoff = pd.Timestamp(start_date)
+                ddf = ddf.loc[cutoff:]
 
             return ddf
 
@@ -1079,20 +1083,17 @@ class Data():
             # 补齐会重算 returns，先掐会被洗回来；因子在后面才吃 returns。
             result = self._drop_head_returns(result)
 
-            # 因子：逐票逐因子贴上（带缓存 —— 全盖住就不算，只缺尾巴就只补尾巴）
-            # 注意在切片之前算：此时还带着预热数据，滚动窗口才够长。
-            result = self._factors_with_cache(result)
+            # 基准数据（必须在算因子之前 —— 因子可能需要它）
+            if self.benchmark:
+                result = self._add_benchmark(result, self.target_dir, pq_filters)
+
+            # 所有因子，一处计算：内置 / ta / 自定义一视同仁（带缓存）
+            # 注意仍在切片之前：此时还带着预热数据，滚动窗口才够长。
+            result = self._all_factors_with_cache(result)
 
             # 切片回用户请求的日期范围
             if start_date is not None and max_window > 0:
                 result = result[result.index >= pd.Timestamp(start_date)]
-
-            # 基准数据
-            if self.benchmark:
-                result = self._add_benchmark(result, self.target_dir, pq_filters)
-
-            # qka 内置因子（需要 benchmark 和 symbol 前缀）
-            result = self._qka_factors_with_cache(result)
 
             # 列顺序复原，与重构前一致
             return self._order_columns(result, self._qka_factor_names())
@@ -1163,6 +1164,149 @@ class Data():
         return ddf.map_partitions(
             lambda part: part.assign(returns=part['returns'].where(part.index > cutoff))
         )
+
+    def _all_factors_with_cache(self, result):
+        """算所有因子 —— 内置 / ta / 自定义，**同一处、同一时机**（基准注入之后）。
+
+        缓存仍按因子粒度分两笔账（内置走 `_qka_factors_with_cache`，其余走
+        `_factors_with_cache`），但它们是同一个阶段的两笔账，不是两条路径：
+        两者都在基准注入之后执行，都能看到基准。
+
+        🚨 为什么必须有基准之后才算：因子可能定义成「相对大盘」的量（β、残差波动、
+           相关系数…）。内置的和自定义的在这个问题上没有任何区别 —— 所以不存在
+           「自定义因子先算一遍、内置因子后算一遍」这种分法。
+        """
+        if not self._factors:
+            return result
+        result = self._factors_with_cache(result)
+        result = self._qka_factors_with_cache(result)
+        return result
+
+    def _apply_all_factors(self, df):
+        """所有因子一处算（无缓存路径；懒加载 / dask 走这里）。df 已含基准。"""
+        inds = self._factors
+        if not inds:
+            return df
+        if callable(inds):
+            # 旧版整表函数形式：直接把整表交给它
+            if isinstance(df, dd.DataFrame):
+                return df.map_partitions(lambda p: inds(p.copy()))
+            return inds(df.copy())
+        if isinstance(df, dd.DataFrame):
+            sample = df.head(self._min_rows_for_factors())
+            meta = self._compute_all_factor_cols(sample.copy())
+            return df.map_partitions(
+                lambda p: self._compute_all_factor_cols(p.copy()), meta=meta)
+        return self._compute_all_factor_cols(df.copy())
+
+    def _compute_all_factor_cols(self, df, only=None):
+        """逐票把该票的全部因子算出来，写回 `{symbol}|{因子}` 列。
+
+        🚨 内置指标和自定义因子在这里没有区别：都是「拿这只票的数据，吐一列」。
+           差别只有函数从哪来 —— 内置的从 qka.core.indicator 取，自定义的是传进来的
+           函数对象，ta 的是从 `ta.xxx.yyy` 这个路径 import 出来的。
+        """
+        if not isinstance(self._factors, dict):
+            return df
+        col_index = self._columns_by_symbol(df.columns)
+        has_bench = 'benchmark|returns' in df.columns
+
+        for symbol in self.symbols:
+            cols = col_index.get(symbol)
+            if not cols:
+                continue
+            plain = self._symbol_slice(df, symbol, cols)
+            if plain.empty:
+                continue
+            # 基准给到自定义因子时叫 bench —— 与内置看到的 benchmark|returns 同源同值
+            if has_bench:
+                plain['bench'] = df['benchmark|returns'].reindex(plain.index)
+
+            for name, spec in self._factors.items():
+                if only is not None and name not in only:
+                    continue
+                series = self._one_factor(plain, symbol, name, spec)
+                if series is not None:
+                    df[f'{symbol}|{name}'] = series.reindex(df.index)
+        return df
+
+    def _one_factor(self, plain, symbol, name, spec):
+        """算单个因子。返回一列 Series，认不出/算失败返回 None。
+
+        plain: 这只票的表，列名**已去前缀**（open/high/low/close/volume/amount/returns），
+               外加一列 bench（基准收益，有基准时才有）。
+        """
+        # ① 自定义函数：直接调，它自己决定用不用 bench
+        if callable(spec):
+            try:
+                res = spec(plain)
+            except Exception as e:                              # noqa: BLE001
+                logger.warning(f'计算 {symbol}|{name} 失败: {type(e).__name__}: {e}')
+                return None
+            if isinstance(res, pd.DataFrame):
+                return res[name] if name in res.columns else None
+            return res
+
+        if not isinstance(spec, (list, tuple)) or not spec:
+            logger.warning(f'因子 {name} 的定义必须是 tuple 或 callable，跳过')
+            return None
+
+        ind_type, args = spec[0], list(spec[1:])
+
+        # ② qka 内置指标：从 indicator 模块取函数，喂「带前缀的小表」
+        if _is_qka_factor(ind_type):
+            opts = args.pop() if args and isinstance(args[-1], dict) else {}
+            lim = opts.get('max_abs_return')
+            fn_name = ind_type.split('.', 1)[1] if ind_type.startswith('qka.') else ind_type
+            fn = getattr(indicator, fn_name, None)
+            if fn is None:
+                logger.warning(f'qka 内置指标不存在: {fn_name}，跳过')
+                return None
+            work = pd.DataFrame({f'{symbol}|returns': plain['returns']})
+            if 'bench' in plain.columns:
+                work['benchmark|returns'] = plain['bench']
+                if lim:
+                    for c in work.columns:
+                        work[c] = work[c].where(work[c].abs() <= lim)
+            rf_kwargs = {}
+            if (self.risk_free is not None and _accepts_rf(fn)
+                    and not _rf_given_positionally(fn, args)):
+                rf_kwargs['rf'] = self.risk_free
+            try:
+                return fn(work, symbol, *args, **rf_kwargs)
+            except ValueError as e:
+                logger.warning(f'计算 {symbol}|{name} 失败: {e}')
+                return None
+
+        # ③ ta 指标：'ta.trend.sma_indicator' + 列名 + 参数
+        cols, rest_start = [], 0
+        for i, arg in enumerate(args):
+            if isinstance(arg, str):
+                cols.append(arg)
+                rest_start = i + 1
+            else:
+                break
+        if not cols:
+            logger.warning(f'因子 {name} 缺少计算列名，跳过')
+            return None
+        rest = args[rest_start:]
+        if not isinstance(ind_type, str) or '.' not in ind_type:
+            logger.warning(f'因子 {name} 的类型必须为 "ta.xxx.yyy" 格式，跳过: {ind_type}')
+            return None
+        import importlib
+        module_name, func_name = ind_type.rsplit('.', 1)
+        try:
+            fn = getattr(importlib.import_module(module_name), func_name)
+        except (ImportError, AttributeError) as e:
+            logger.warning(f'无法加载指标函数 {ind_type}: {e}')
+            return None
+        try:
+            if len(cols) == 1:
+                return fn(plain[cols[0]], *rest)
+            return fn(*[plain[f] for f in cols], *rest)
+        except Exception as e:                                  # noqa: BLE001
+            logger.warning(f'计算 {symbol}|{name} 失败: {type(e).__name__}: {e}')
+            return None
 
     def _apply_factors(self, df):
         """
@@ -1903,6 +2047,10 @@ class Data():
             sub = self._symbol_slice(result, symbol, cols)
             if sub.empty:
                 continue
+            # 基准也交给自定义因子（叫 bench）—— 此时 benchmark 已注入，
+            # 自定义因子和内置因子看到的是同一份基准收益
+            if 'benchmark|returns' in result.columns:
+                sub['bench'] = result['benchmark|returns'].reindex(sub.index)
 
             # 模拟标的没有缓存文件；没开缓存 / 配方认不出也一样 —— 一律现算不落盘
             if plan is None or symbol in self._sim_specs:
