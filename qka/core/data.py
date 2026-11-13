@@ -767,6 +767,116 @@ class Data():
             pq.write_table(table, path)
         return path
 
+    def _prefetch_latest(
+        self, symbols: List[str], download_start: str = None,
+        download_end: str = None,
+    ) -> List[str]:
+        """先用批量接口把缓存补上，返回**仍需逐只下载**的票。
+
+        这是 `get()` 下载前的预热：绝大多数日常调用只是「缓存落后一两天」，
+        一次批量请求就能补齐，不必每只各发一个请求。
+
+        **取数区间由缓存自己决定，不拍条数：**
+          起点 = 这批票里最早的缓存末日 − 5 天（与 `_download` 的 start_after 同口径）
+          终点 = 请求的 end_date（None 则到今天）
+
+        前复权不做增量（历史会被分红送股改写），整批原样返回，交给 `_download`
+        整段重取。
+
+        Args:
+            symbols: 待下载的标的
+            download_start / download_end: 本次请求范围，与 `_download` 同义
+
+        Returns:
+            List[str]: 仍需逐只下载的标的
+        """
+        if not self.incremental:
+            return list(symbols)
+
+        # 起点取决于「本地最旧的那只补到哪天」。读各票末日只读一列，几百只
+        # 一两秒，比多发几百个请求便宜得多。
+        lasts = []
+        for s in symbols:
+            p = self.target_dir / f"{s}.parquet"
+            if not p.exists():
+                continue                    # 首次建缓存，批量帮不上，留在后面
+            try:
+                idx = pd.read_parquet(p, columns=['close']).index
+                lasts.append(pd.to_datetime(idx).max())
+            except Exception:
+                continue
+        if not lasts:
+            return list(symbols)
+
+        start = (min(lasts) - pd.Timedelta(days=5)).strftime('%Y-%m-%d')
+        end = download_end or pd.Timestamp.now().floor('D').strftime('%Y-%m-%d')
+        if pd.Timestamp(start) > pd.Timestamp(end):
+            return list(symbols)            # 请求区间全在缓存之前，批量帮不上
+
+        try:
+            bars_map = self._get_many_from_tickflow(symbols, start, end)
+        except Exception as e:
+            # 批量这条路不通（网络 / 限流 / 接口变更）就整体回落逐只，行为与从前一致
+            logger.warning(f"批量补数失败，回落逐只下载：{e}")
+            return list(symbols)
+
+        for s, bars in bars_map.items():
+            try:
+                self._append_bars(s, bars)
+            except Exception as e:
+                # 单只写盘失败不带崩整批；它会在下面的重算里留下来走逐只
+                logger.warning(f"{s}: 批量补数写入失败，回落逐只下载：{e}")
+
+        # 补过之后重新问一遍：**真补上了的才算解决**。首次建缓存的、缓存缺扩展
+        # 列的、请求区间落在缓存之前的，都会在这里留下来，交给 _download。
+        return [s for s in symbols
+                if self._needs_download(s, download_start, download_end)]
+
+    def _append_bars(self, symbol: str, bars: pd.DataFrame):
+        """把新日期的行情追加进这只票的缓存，返回新增天数（None = 缓存不存在）。
+
+        🚨 只追加缓存里**没有的日期**，历史行一个不动。
+        🚨 新行的因子列留空（NaN），由之后 cache_only 的因子补算填上；
+           列结构与 dtype 必须与缓存完全一致，否则 qka 读回来会错列。
+        🚨 必须保留原有 parquet 元数据（因子列登记 / 已确认起点），否则下次
+           `_restore_factor_columns` 认不出哪些列是因子，增量会把因子抹掉。
+        """
+        path = self.target_dir / f"{symbol}.parquet"
+        if not path.exists():
+            return None
+
+        existing = pd.read_parquet(path)
+        if not isinstance(existing.index, pd.DatetimeIndex):
+            existing.index = pd.to_datetime(existing.index)
+        new_rows = bars[bars.index > existing.index.max()]
+        if new_rows.empty:
+            return 0
+
+        # 按缓存的列顺序造新行：行情列有值，其余（因子等派生列）留空
+        add = pd.DataFrame(
+            {c: (new_rows[c].to_numpy() if c in new_rows.columns else np.nan)
+             for c in existing.columns},
+            index=new_rows.index,
+        )
+        for col, dt in existing.dtypes.items():
+            try:
+                add[col] = add[col].astype(dt)
+            except (ValueError, TypeError):
+                pass
+
+        combined = pd.concat([existing, add]).sort_index()
+        combined.index.name = existing.index.name or 'date'
+        # 因子列是派生数据，合并后补回旧值（口径同 _download 的增量段）
+        combined = self._restore_factor_columns(combined, existing, path)
+
+        table = pa.Table.from_pandas(combined)
+        old_meta = dict(pq.read_schema(path).metadata or {})
+        if old_meta:
+            table = table.replace_schema_metadata(
+                {**old_meta, **(table.schema.metadata or {})})
+        pq.write_table(table, path)
+        return len(add)
+
     def _rewrite_full(
         self, path: Path, symbol: str,
         download_start: str = None, download_end: str = None,
@@ -959,6 +1069,13 @@ class Data():
         try:
             if need_calendar:
                 sim_index = self._trading_index(sim_start, sim_end)
+            # tickflow 有批量接口：先用一次请求把落后的票批量补上，剩下补不齐的
+            # （首次建缓存 / 前复权要整段重取 / 缓存缺扩展列）才逐只下载。
+            # 日常调用通常只落后一两天，这一段能把 N 次请求压到几次。
+            if need_download and self.source == 'tickflow':
+                need_download = self._prefetch_latest(
+                    need_download, download_start, download_end)
+
             if need_download:
                 # baostock 与 tdx 都是「进程级单例连接」（tdx 的 tq 类方法
                 # 共用同一 run_id），并发调用会共用同一连接状态，故逐个下载；
@@ -2386,6 +2503,88 @@ class Data():
         for col in self.BAOSTOCK_BASE_FIELDS:
             df[col] = pd.to_numeric(df[col], errors='coerce')
         return df
+
+    def _get_many_from_tickflow(
+        self, symbols: List[str], start_date: str, end_date: str,
+        batch_size: int = 100, max_workers: int = 4,
+    ) -> dict:
+        """从 TickFlow **一次取回多只**标的的日线（按日期区间，不是按条数）。
+
+        单只走 `_get_from_tickflow`，一只一个请求；全市场 7500 只就是 7500 次，
+        受限流约束要几小时。TickFlow 的 klines.batch 会把它们按 batch_size 切块、
+        用 max_workers 个并发发出去，几十次请求几分钟就够。
+
+        返回结构与 `_get_from_tickflow` 完全一致（date 索引 + OHLCV/amount），
+        口径转换也一致：
+        - **volume**：TickFlow 是「手」，×100 换成「股」
+        - **timestamp**：北京时间零点的 UTC 表示，要换到上海时区再取日期
+
+        Args:
+            symbols: 标的列表（「代码.市场」或 sh.600519 均可）
+            start_date / end_date: 要取的日期区间（含两端）。这个区间由调用方
+                按「缓存缺到哪」算出来，不在这里拍一个条数。
+            batch_size: 一次请求塞多少只（接口按 URL 长度自己切块）
+            max_workers: SDK 内部一次并发几个请求（这是 SDK 参数，
+                不是业务层开线程池）
+
+        Returns:
+            dict: {原始代码: DataFrame}。**取不到的标的不在字典里**（停牌 /
+                  退市 / 新代码），由调用方决定怎么处理。
+        """
+        period_map = {'1d': '1d', '1w': '1w', '1M': '1M'}
+        if self.period not in period_map:
+            raise RuntimeError(
+                f"批量取数暂不支持周期 {self.period!r}（可选: {list(period_map)}）"
+            )
+        adjust_map = {'bfq': 'none', 'qfq': 'forward', 'hfq': 'backward'}
+        adjust = adjust_map.get(self.adjust, 'forward')
+
+        # 日期 → 毫秒时间戳（右端 +1 天，保证 end_date 当天落在闭区间内）
+        start_ms = int(pd.Timestamp(start_date).timestamp() * 1000)
+        end_ms = int((pd.Timestamp(end_date) + pd.Timedelta(days=1)).timestamp() * 1000)
+
+        # 原代码 ↔ tickflow 代码互转：batch 用它自己那套做 key，要能映射回来
+        tf_of = {self.to_tickflow_symbol(s): s for s in symbols}
+        client = self._tickflow_client()
+        try:
+            res = client.klines.batch(
+                list(tf_of),
+                period=period_map[self.period],
+                adjust=adjust,
+                # count 与区间一起给：只给区间的话服务端默认只回最近 100 条，
+                # 会把长区间静默截断（单只 _get_from_tickflow 踩过同一个坑）
+                count=10000,
+                start_time=start_ms,
+                end_time=end_ms,
+                batch_size=batch_size,
+                max_workers=max_workers,
+            )
+        except Exception as e:
+            raise RuntimeError(f"tickflow 批量取数失败: {e}")
+
+        out = {}
+        for tf_sym, d in (res or {}).items():
+            sym = tf_of.get(tf_sym)
+            if sym is None or not d or not d.get('timestamp'):
+                continue
+            idx = (pd.to_datetime(pd.Series(d['timestamp']), unit='ms', utc=True)
+                   .dt.tz_convert('Asia/Shanghai')
+                   .dt.normalize()
+                   .dt.tz_localize(None))
+            idx.name = 'date'
+            df = pd.DataFrame({
+                'open': d['open'],
+                'high': d['high'],
+                'low': d['low'],
+                'close': d['close'],
+                'volume': [v * 100 for v in d['volume']],   # 手 → 股
+                'amount': d['amount'],
+            }, index=idx)
+            for col in self.BAOSTOCK_BASE_FIELDS:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            df = df[~df.index.duplicated(keep='last')].sort_index()
+            out[sym] = df
+        return out
 
     # ── 通达信数据源（本机 TQ 版客户端，仅 Windows）────────────────
 
