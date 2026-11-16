@@ -37,6 +37,17 @@ from .sources.tdx import TdxMixin
 from .sources.tickflow import TickflowMixin
 
 
+class NoDataError(RuntimeError):
+    """数据源**确认**没有这只标的的数据（退市 / 停牌 / 未上市 / 代码变更）。
+
+    🚨 必须和「请求失败」分开（2026-11-16 事故）：
+       一天日更里 7,882 只票总有几十只属于这种情况，实测 `588493.SH`、
+       `002525.SZ` 去问数据源就是 0 行 —— 重试多少次都是空。
+       以前它们和网络错误走同一个 except，被记进 errors，导致**整批 500 只**
+       一起报错、流水线中止。这类票应该安静地跳过，不该让其他 7,828 只陪葬。
+    """
+
+
 class Data(TickflowMixin, BaostockMixin, TdxMixin, SimMixin,
            CacheMixin, FactorMixin):
     """
@@ -449,6 +460,7 @@ class Data(TickflowMixin, BaostockMixin, TdxMixin, SimMixin,
             bs_logged_in = True
 
         errors = []
+        no_data = []          # 数据源确认没有的票：跳过，不算失败
         sim_index = None
         try:
             if need_calendar:
@@ -468,6 +480,9 @@ class Data(TickflowMixin, BaostockMixin, TdxMixin, SimMixin,
                     for symbol in tqdm(need_download, desc="下载数据"):
                         try:
                             self._download(symbol, download_start, download_end)
+                        except NoDataError as e:
+                            no_data.append(symbol)
+                            print(f"\n[跳过] {e}")
                         except Exception as e:
                             errors.append(f"{symbol}: {e}")
                             print(f"\n[警告] 下载 {symbol} 失败: {e}")
@@ -484,11 +499,20 @@ class Data(TickflowMixin, BaostockMixin, TdxMixin, SimMixin,
                                 symbol = futures[future]
                                 try:
                                     future.result()
+                                except NoDataError as e:
+                                    # 数据源确认没有（退市/停牌/未上市）：安静跳过，
+                                    # 不让它把整批拖成失败
+                                    no_data.append(symbol)
+                                    print(f"\n[跳过] {e}")
                                 except Exception as e:
                                     errors.append(f"{symbol}: {e}")
                                     print(f"\n[警告] 下载 {symbol} 失败: {e}")
                                 pbar.update(1)
                                 pbar.set_postfix_str(f"当前: {symbol}")
+            if no_data:
+                logger.info(
+                    f"共 {len(no_data)} 只标的在数据源没有数据，已跳过："
+                    f"{', '.join(no_data[:10])}{' 等' if len(no_data) > 10 else ''}")
             if errors:
                 raise RuntimeError(
                     f"共 {len(errors)} 只股票下载失败:\n" +
@@ -654,7 +678,9 @@ class Data(TickflowMixin, BaostockMixin, TdxMixin, SimMixin,
                 extra_fields=merged_extra,
             )
             if len(df) == 0:
-                raise RuntimeError(f"{symbol}: 数据源（{self.source}）返回空数据")
+                # 专门类型：上层要区分「数据源确实没有」和「请求失败」，
+                # 前者跳过、后者中止（见 NoDataError 的说明）
+                raise NoDataError(f"{symbol}: 数据源（{self.source}）返回空数据")
             table = pa.Table.from_pandas(df)
             # 这次就是从这个起点问的，一并记下「已确认起点」
             self._write_verified_from(
