@@ -69,8 +69,6 @@ class TickflowMixin:
                     cls._tf_clients[cache_key] = client
         return client
 
-    @staticmethod
-
     def _get_from_tickflow(
         self, symbol: str,
         start_date: str = '1990-01-01',
