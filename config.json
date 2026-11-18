@@ -1,0 +1,30 @@
+{
+  "data": {
+    "source": "tickflow",
+    "adjust": "qfq",
+    "period": "1d",
+    "tickflow_api_key": "",
+    "tdx_root": "",
+    "datadir": "",
+    "factor_cache": false,
+    "fill_suspended": false,
+    "warmup": 20
+  },
+  "broker": {
+    "commission_rate": 0.00025,
+    "min_commission": 5.0,
+    "stamp_duty_rate": 0.0005,
+    "slippage": 0.001,
+    "initial_cash": 200000.0
+  },
+  "backtest": {
+    "benchmark": "000300.SH",
+    "risk_free_rate": 0.03,
+    "periods_per_year": 252
+  },
+  "server": {
+    "port": 15002,
+    "host": "0.0.0.0",
+    "auto_open_browser": true
+  }
+}

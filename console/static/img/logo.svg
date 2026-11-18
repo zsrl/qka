@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="50%" stop-color="#1e293b" />
+      <stop offset="100%" stop-color="#0b1120" />
+    </linearGradient>
+    <linearGradient id="lineGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#3b82f6" />
+      <stop offset="50%" stop-color="#06b6d4" />
+      <stop offset="100%" stop-color="#10b981" />
+    </linearGradient>
+    <linearGradient id="glowGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981" stop-opacity="0.35" />
+      <stop offset="100%" stop-color="#06b6d4" stop-opacity="0.0" />
+    </linearGradient>
+    <linearGradient id="barGradUp" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#34d399" />
+      <stop offset="100%" stop-color="#059669" />
+    </linearGradient>
+    <linearGradient id="barGradAccent" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="100%" stop-color="#0284c7" />
+    </linearGradient>
+  </defs>
+
+  <!-- Container Base -->
+  <rect x="4" y="4" width="92" height="92" rx="22" fill="url(#bgGrad)" stroke="#334155" stroke-width="1.5" />
+
+  <!-- Subtle Grid Lines -->
+  <line x1="16" y1="36" x2="84" y2="36" stroke="#334155" stroke-width="0.75" stroke-dasharray="3 3" opacity="0.4" />
+  <line x1="16" y1="56" x2="84" y2="56" stroke="#334155" stroke-width="0.75" stroke-dasharray="3 3" opacity="0.4" />
+  <line x1="16" y1="76" x2="84" y2="76" stroke="#334155" stroke-width="0.75" stroke-dasharray="3 3" opacity="0.4" />
+
+  <!-- Candlestick 1 (Left) -->
+  <line x1="28" y1="46" x2="28" y2="74" stroke="#38bdf8" stroke-width="1.5" stroke-linecap="round" opacity="0.7" />
+  <rect x="24" y="52" width="8" height="15" rx="2" fill="url(#barGradAccent)" />
+
+  <!-- Candlestick 2 (Center) -->
+  <line x1="48" y1="34" x2="48" y2="68" stroke="#34d399" stroke-width="1.5" stroke-linecap="round" opacity="0.8" />
+  <rect x="44" y="40" width="8" height="20" rx="2" fill="url(#barGradUp)" />
+
+  <!-- Candlestick 3 (Right) -->
+  <line x1="68" y1="20" x2="68" y2="54" stroke="#10b981" stroke-width="1.5" stroke-linecap="round" opacity="0.9" />
+  <rect x="64" y="26" width="8" height="22" rx="2" fill="url(#barGradUp)" />
+
+  <!-- Gradient Area Under Curve -->
+  <path d="M 20 78 Q 42 66 56 46 T 82 24 L 82 78 Z" fill="url(#glowGrad)" />
+
+  <!-- Upward Trend Line -->
+  <path d="M 20 78 Q 42 66 56 46 T 82 24" fill="none" stroke="url(#lineGrad)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" />
+
+  <!-- Glowing Tip Node -->
+  <circle cx="82" cy="24" r="5" fill="#ffffff" />
+  <circle cx="82" cy="24" r="8" fill="#10b981" opacity="0.4" />
+</svg>
